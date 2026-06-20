@@ -9,11 +9,28 @@ Covers the critical mechanics from the engine spec:
   6. Refund: negative fees, no floor, no DCC cashback
   7. Non-offerable brand (e.g. TWINT): all fee components are zero
   8. Unknown category falls back to Credit parameters without raising
+
+Note on floor tests: real SwiPay params have min_fee=0, so the floor never fires
+in production. The floor logic must still be correct for future configurations.
+Floor tests therefore inject a synthetic category with min_fee=0.50 via monkeypatch.
 """
 import pytest
 
+import swipay_wl_compare.params as _params_mod
 from swipay_wl_compare.engine import TxResult, compute_swipay
-from swipay_wl_compare.params import NON_OFFERABLE, PARAMS
+from swipay_wl_compare.params import BrandParams, NON_OFFERABLE, PARAMS
+
+# Synthetic params used only to exercise the floor code path.
+_FLOOR_PARAMS = BrandParams(asf_pct=0.001, asf_fix=0.00, min_fee=0.50, dcc_cashback_pct=0.014)
+_FLOOR_CAT = "_FloorTest"
+
+
+@pytest.fixture
+def floor_category(monkeypatch):
+    """Temporarily add a synthetic category with min_fee=0.50 to PARAMS."""
+    patched = {**PARAMS, _FLOOR_CAT: _FLOOR_PARAMS}
+    monkeypatch.setattr(_params_mod, "PARAMS", patched)
+    return _FLOOR_PARAMS
 
 
 # ---------------------------------------------------------------------------
@@ -31,12 +48,12 @@ def test_identity_normal_purchase():
     assert r.fee_total == pytest.approx(r.asf_new + sf + ic, abs=1e-9)
 
 
-def test_identity_holds_after_floor():
+def test_identity_holds_after_floor(floor_category):
     """Identity must hold even when the floor raises asf_new."""
     sf, ic = 0.00, 0.00
     r = compute_swipay(
         brutto=1.0, scheme_fee=sf, interchange=ic,
-        category="Credit", is_dcc=False, brand="Visa", is_refund=False,
+        category=_FLOOR_CAT, is_dcc=False, brand="Visa", is_refund=False,
     )
     assert r.floored
     assert r.fee_total == pytest.approx(r.asf_new + sf + ic, abs=1e-9)
@@ -46,26 +63,25 @@ def test_identity_holds_after_floor():
 # 2. Minimum-fee floor activates for small amounts
 # ---------------------------------------------------------------------------
 
-def test_floor_activates_small_amount():
-    """CHF 1.00 × 0.16 % = 0.0016 CHF ASF — well below Credit min_fee of 0.12."""
+def test_floor_activates_small_amount(floor_category):
+    """Floor fires when natural fee is below min_fee."""
     sf, ic = 0.00, 0.00
     r = compute_swipay(
         brutto=1.0, scheme_fee=sf, interchange=ic,
-        category="Credit", is_dcc=False, brand="Visa", is_refund=False,
+        category=_FLOOR_CAT, is_dcc=False, brand="Visa", is_refund=False,
     )
-    p = PARAMS["Credit"]
     assert r.floored
-    assert r.fee_total == pytest.approx(p.min_fee, abs=1e-9)
+    assert r.fee_total == pytest.approx(_FLOOR_PARAMS.min_fee, abs=1e-9)
 
 
-def test_floor_sets_fee_to_min_fee_when_sf_ic_are_zero():
+def test_floor_sets_fee_to_min_fee_when_sf_ic_are_zero(floor_category):
     """When sf=ic=0, fee_total after floor equals exactly min_fee."""
     r = compute_swipay(
         brutto=0.50, scheme_fee=0.0, interchange=0.0,
-        category="Debit", is_dcc=False, brand="Maestro", is_refund=False,
+        category=_FLOOR_CAT, is_dcc=False, brand="Maestro", is_refund=False,
     )
     assert r.floored
-    assert r.fee_total == pytest.approx(PARAMS["Debit"].min_fee, abs=1e-9)
+    assert r.fee_total == pytest.approx(_FLOOR_PARAMS.min_fee, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -88,19 +104,18 @@ def test_floor_does_not_activate_large_amount():
 # 4. DCC order: floor first, then cashback as separate credit
 # ---------------------------------------------------------------------------
 
-def test_dcc_cashback_applied_after_floor():
+def test_dcc_cashback_applied_after_floor(floor_category):
     """For a DCC transaction that triggers the floor, fee_total equals min_fee
     and cashback is non-zero and separate."""
     sf, ic = 0.00, 0.00
     brutto = 1.0
     r = compute_swipay(
         brutto=brutto, scheme_fee=sf, interchange=ic,
-        category="Credit", is_dcc=True, brand="Visa", is_refund=False,
+        category=_FLOOR_CAT, is_dcc=True, brand="Visa", is_refund=False,
     )
-    p = PARAMS["Credit"]
     assert r.floored
-    assert r.fee_total == pytest.approx(p.min_fee, abs=1e-9)
-    expected_cashback = p.dcc_cashback_pct * brutto
+    assert r.fee_total == pytest.approx(_FLOOR_PARAMS.min_fee, abs=1e-9)
+    expected_cashback = _FLOOR_PARAMS.dcc_cashback_pct * brutto
     assert r.cashback == pytest.approx(expected_cashback, abs=1e-9)
     assert r.net_cost == pytest.approx(r.fee_total - r.cashback, abs=1e-9)
 
@@ -109,15 +124,14 @@ def test_dcc_cashback_applied_after_floor():
 # 5. DCC cashback never lowers fee_total below min_fee
 # ---------------------------------------------------------------------------
 
-def test_dcc_cashback_does_not_reduce_fee_total_below_min_fee():
+def test_dcc_cashback_does_not_reduce_fee_total_below_min_fee(floor_category):
     """fee_total must reflect the floored value; cashback only lowers net_cost."""
     sf, ic = 0.00, 0.00
     r = compute_swipay(
         brutto=5.0, scheme_fee=sf, interchange=ic,
-        category="Credit", is_dcc=True, brand="Visa", is_refund=False,
+        category=_FLOOR_CAT, is_dcc=True, brand="Visa", is_refund=False,
     )
-    p = PARAMS["Credit"]
-    assert r.fee_total >= p.min_fee - 1e-9
+    assert r.fee_total >= _FLOOR_PARAMS.min_fee - 1e-9
 
 
 # ---------------------------------------------------------------------------

@@ -31,24 +31,26 @@ class BrandParams:
 # ---------------------------------------------------------------------------
 PARAMS: dict[str, BrandParams] = {
     "Debit": BrandParams(
-        asf_pct=0.0011,
-        asf_fix=0.00,
-        min_fee=0.10,
-        dcc_cashback_pct=0.014,
+        asf_pct=0.0008,
+        asf_fix=0.01,
+        min_fee=0.00,
+        dcc_cashback_pct=0.0185,
         ic_cap=None,
     ),
     "Credit": BrandParams(
         asf_pct=0.0016,
-        asf_fix=0.00,
-        min_fee=0.12,
-        dcc_cashback_pct=0.014,
+        asf_fix=0.01,
+        min_fee=0.00,
+        dcc_cashback_pct=0.0185,
         ic_cap=None,
     ),
+    # Commercial cards carry no separate rate; Credit is used as conservative fallback.
+    # The Worldline export does not split Commercial into Debit/Credit sub-categories.
     "Commercial": BrandParams(
-        asf_pct=0.0020,
-        asf_fix=0.00,
-        min_fee=0.12,
-        dcc_cashback_pct=0.014,
+        asf_pct=0.0016,
+        asf_fix=0.01,
+        min_fee=0.00,
+        dcc_cashback_pct=0.0185,
         ic_cap=None,
     ),
 }
