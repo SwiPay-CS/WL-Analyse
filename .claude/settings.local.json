@@ -7,7 +7,10 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status)",
-      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status --short)"
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status --short)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp add src/swipay_wl_compare/params.py tests/test_engine.py)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp commit -m ' *)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp add .claude/settings.local.json)"
     ]
   }
 }
