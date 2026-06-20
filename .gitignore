@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Customer transaction data — never commit (contains real cardholder data)
+data/*
+!data/.gitkeep
+*.xlsb
+*.csv
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
