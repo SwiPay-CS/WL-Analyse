@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv --version)",
+      "Bash(uv python *)",
+      "Bash(uv init *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status --short)"
+    ]
+  }
+}
