@@ -87,6 +87,25 @@ def build_breakdown(
     return summary
 
 
+def build_projection_table(proj: dict) -> pd.DataFrame:
+    """Convert a project_summary() dict into a two-column display DataFrame."""
+    rows = [
+        ("Zeitraum (Ist)",          f"{proj['actual_days']} Tage"),
+        ("Zeitraum (Hochrechnung)", f"{proj['target_days']} Tage"),
+        ("Hochrechnungsfaktor",     f"{proj['scale_factor']:.4f}x"),
+        ("Transaktionen (Ist)",     f"{proj['tx_count_actual']:,}"),
+        ("Transaktionen (proj.)",   f"{proj['tx_count_proj']:,}"),
+        ("WL Netto (Ist) CHF",      f"{proj['wl_net_actual']:,.2f}"),
+        ("WL Netto (proj.) CHF",    f"{proj['wl_net_proj']:,.2f}"),
+        ("SP Netto (Ist) CHF",      f"{proj['sp_net_actual']:,.2f}"),
+        ("SP Netto (proj.) CHF",    f"{proj['sp_net_proj']:,.2f}"),
+        ("Differenz (Ist) CHF",     f"{proj['delta_actual']:,.2f}"),
+        ("Differenz (proj.) CHF",   f"{proj['delta_proj']:,.2f}"),
+        ("Differenz %",             f"{proj['delta_pct']:.2f} %"),
+    ]
+    return pd.DataFrame(rows, columns=["Kennzahl", "Wert"])
+
+
 def to_csv(summary: pd.DataFrame, path: Path) -> None:
     summary.to_csv(path, index=False, sep=";", decimal=",", float_format="%.2f")
     logger.info("CSV written: %s", path.name)

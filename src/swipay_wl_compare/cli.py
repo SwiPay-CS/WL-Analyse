@@ -10,7 +10,8 @@ from .engine import run_engine
 from .loader import load_file
 from .logging_setup import setup_logging
 from .pdf_report import to_pdf
-from .report import build_breakdown, to_csv, to_html
+from .projection import detect_period, project_breakdown, project_summary
+from .report import build_breakdown, build_projection_table, to_csv, to_html
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,13 @@ def main() -> None:
         "--output-dir",
         default="output",
         help="Ordner für CSV- und HTML-Reports (Standard: output/)",
+    )
+    parser.add_argument(
+        "--project-days",
+        type=int,
+        default=365,
+        metavar="TAGE",
+        help="Zielperiode für Hochrechnung in Tagen (Standard: 365)",
     )
     parser.add_argument(
         "--log-level",
@@ -127,9 +135,37 @@ def main() -> None:
         f"Worldline-Cashback: {wl_dcc:,.2f} CHF"
     )
 
+    # --- Hochrechnung ---
+    try:
+        period = detect_period(df)
+        proj = project_summary(
+            wl_fee=wl_fee, wl_cashback=wl_dcc,
+            sp_fee=sp_fee, sp_cashback=sp_cashback,
+            tx_count=len(df),
+            actual_days=period.actual_days,
+            target_days=args.project_days,
+        )
+        print(f"\n6) HOCHRECHNUNG  ({period.actual_days} Tage → {args.project_days} Tage, "
+              f"Faktor {proj['scale_factor']:.2f}x)")
+        print(f"   Zeitraum Ist:  {period.start.date()} – {period.end.date()}")
+        print(f"   Transaktionen: {proj['tx_count_actual']:>10,} (Ist)  →  "
+              f"{proj['tx_count_proj']:>10,} (proj.)")
+        print(f"   WL Netto:      {proj['wl_net_actual']:>12,.2f} CHF  →  "
+              f"{proj['wl_net_proj']:>12,.2f} CHF")
+        print(f"   SP Netto:      {proj['sp_net_actual']:>12,.2f} CHF  →  "
+              f"{proj['sp_net_proj']:>12,.2f} CHF")
+        print(f"   Differenz:     {proj['delta_actual']:>12,.2f} CHF  →  "
+              f"{proj['delta_proj']:>12,.2f} CHF  ({proj['delta_pct']:.1f} %)")
+    except Exception as exc:
+        logger.warning("Hochrechnung nicht möglich: %s", exc)
+        proj = None
+        period = None
+
     # --- Reports ---
     stem = path.stem
     meta = f"Quelle: {path.name} | {len(df):,} Transaktionen | Parameter: SwiPay"
+
+    _COL_W = [42, 20, 32, 32, 36, 26]
 
     by_cat = build_breakdown(df, eng, "Karten Kategorie")
     by_brand = build_breakdown(df, eng, "Brand")
@@ -137,30 +173,45 @@ def main() -> None:
     to_csv(by_cat,   out_dir / f"{stem}_nach_kategorie.csv")
     to_csv(by_brand, out_dir / f"{stem}_nach_brand.csv")
 
+    html_sections: dict = {
+        "Nach Karten-Kategorie": by_cat,
+        "Nach Brand":            by_brand,
+    }
+    pdf_sections: dict = {
+        "Nach Karten-Kategorie": (by_cat,   "Karten Kategorie", _COL_W),
+        "Nach Brand":            (by_brand,  "Brand",            _COL_W),
+    }
+
+    if proj is not None and period is not None:
+        proj_table = build_projection_table(proj)
+        proj_by_cat = project_breakdown(by_cat, "Karten Kategorie",
+                                        period.actual_days, args.project_days)
+        to_csv(proj_by_cat, out_dir / f"{stem}_hochrechnung_kategorie.csv")
+        html_sections[f"Hochrechnung auf {args.project_days} Tage (nach Kategorie)"] = proj_by_cat
+        html_sections["Hochrechnung Zusammenfassung"] = proj_table
+        pdf_sections[f"Hochrechnung auf {args.project_days} Tage"] = (
+            proj_by_cat, "Karten Kategorie", _COL_W
+        )
+
     to_html(
-        {
-            "Nach Karten-Kategorie": by_cat,
-            "Nach Brand":           by_brand,
-        },
+        html_sections,
         out_dir / f"{stem}_report.html",
         filename=f"SwiPay-Vergleich {stem}",
         meta=meta,
     )
 
-    _COL_W = [42, 20, 32, 32, 36, 26]
     to_pdf(
-        {
-            "Nach Karten-Kategorie": (by_cat,   "Karten Kategorie", _COL_W),
-            "Nach Brand":            (by_brand,  "Brand",            _COL_W),
-        },
+        pdf_sections,
         out_dir / f"{stem}_report.pdf",
         title=f"SwiPay-Vergleich {stem}",
         meta=meta,
     )
 
-    print(f"\n6) REPORTS gespeichert in '{out_dir}/'")
+    print(f"\n7) REPORTS gespeichert in '{out_dir}/'")
     print(f"   {stem}_nach_kategorie.csv")
     print(f"   {stem}_nach_brand.csv")
+    if proj is not None:
+        print(f"   {stem}_hochrechnung_kategorie.csv")
     print(f"   {stem}_report.html")
     print(f"   {stem}_report.pdf")
 
