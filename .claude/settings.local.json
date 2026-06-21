@@ -10,7 +10,10 @@
       "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status --short)",
       "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp add src/swipay_wl_compare/params.py tests/test_engine.py)",
       "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp commit -m ' *)",
-      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp add .claude/settings.local.json)"
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp add .claude/settings.local.json)",
+      "Bash(uv run *)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp add src/swipay_wl_compare/report.py src/swipay_wl_compare/cli.py src/swipay_wl_compare/engine.py .gitignore)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp diff)"
     ]
   }
 }
