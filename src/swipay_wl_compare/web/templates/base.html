@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SwiPay WL Compare{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Saira:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --red:          #be5e48;
+      --dark-red:     #8e312b;
+      --anthracite:   #3e4b4c;
+      --white:        #ffffff;
+      --bg:           #f5f4f1;
+      --card:         #ffffff;
+      --border:       #e2dedd;
+      --sig-green:    #949f50;
+      --sig-blue:     #224f59;
+      --sig-cyan:     #3c8f99;
+      --sig-orange:   #ec6608;
+      --text-muted:   #7a8a8b;
+      --shadow:       0 2px 16px rgba(62,75,76,.10);
+      --shadow-lg:    0 8px 40px rgba(62,75,76,.14);
+    }
+
+    body {
+      font-family: 'Saira', sans-serif;
+      background: var(--bg);
+      color: var(--anthracite);
+      min-height: 100vh;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    /* ── Header ──────────────────────────────── */
+    .site-header {
+      background: linear-gradient(135deg, var(--anthracite) 0%, var(--sig-blue) 100%);
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 12px rgba(0,0,0,.18);
+    }
+    .site-header .brand {
+      display: flex;
+      align-items: baseline;
+      gap: .45rem;
+      text-decoration: none;
+    }
+    .site-header .brand-swipay {
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: var(--red);
+      letter-spacing: -.01em;
+    }
+    .site-header .brand-tool {
+      font-size: .8rem;
+      font-weight: 400;
+      color: rgba(255,255,255,.55);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .site-header nav a {
+      color: rgba(255,255,255,.7);
+      text-decoration: none;
+      font-size: .82rem;
+      font-weight: 500;
+      letter-spacing: .04em;
+      transition: color .18s;
+    }
+    .site-header nav a:hover { color: var(--white); }
+
+    /* ── Flash messages ──────────────────────── */
+    .flash-list {
+      list-style: none;
+      padding: 1rem 2rem;
+    }
+    .flash-list li {
+      background: #fff3f1;
+      border-left: 3px solid var(--red);
+      color: var(--dark-red);
+      padding: .65rem 1rem;
+      border-radius: 0 6px 6px 0;
+      font-size: .88rem;
+      margin-bottom: .5rem;
+    }
+
+    /* ── Footer ──────────────────────────────── */
+    .site-footer {
+      text-align: center;
+      padding: 2.5rem 1rem;
+      font-size: .73rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      margin-top: 4rem;
+    }
+    .site-footer strong { color: var(--red); }
+
+    /* ── Utilities ───────────────────────────── */
+    .container { max-width: 1160px; margin: 0 auto; padding: 0 1.5rem; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      padding: .65rem 1.4rem;
+      border-radius: 6px;
+      font-family: 'Saira', sans-serif;
+      font-size: .88rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      text-decoration: none;
+      transition: all .18s;
+    }
+    .btn-primary {
+      background: var(--red);
+      color: var(--white);
+    }
+    .btn-primary:hover { background: var(--dark-red); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(190,94,72,.35); }
+    .btn-ghost {
+      background: transparent;
+      color: var(--anthracite);
+      border: 1.5px solid var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--anthracite); }
+    .positive { color: var(--sig-green); }
+    .negative { color: var(--red); }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="site-header">
+    <a href="{{ url_for('index') }}" class="brand">
+      <span class="brand-swipay">SwiPay</span>
+      <span class="brand-tool">WL Compare</span>
+    </a>
+    <nav>{% block nav %}{% endblock %}</nav>
+  </header>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <ul class="flash-list">
+        {% for m in messages %}<li>{{ m }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+
+  <footer class="site-footer">
+    <strong>SwiPay WL Compare</strong> &nbsp;·&nbsp; Internes Tool &nbsp;·&nbsp;
+    Parameter sind illustrativ – NICHT die echte SwiPay-Preisliste &nbsp;·&nbsp;
+    Vertraulich, nur für internen Gebrauch
+  </footer>
+</body>
+</html>

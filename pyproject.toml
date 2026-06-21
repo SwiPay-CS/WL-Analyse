@@ -5,6 +5,7 @@ description = "Worldline-Transaktionsexporte gegen SwiPay-Angebot verrechnen (in
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "flask>=3.1.3",
     "fpdf2>=2.8.7",
     "pandas>=3.0.3",
     "pyxlsb>=1.0.10",
@@ -12,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 swipay-wl-compare = "swipay_wl_compare.cli:main"
+swipay-wl-serve   = "swipay_wl_compare.web.app:serve"
 
 [build-system]
 requires = ["uv_build>=0.11.22,<0.12.0"]

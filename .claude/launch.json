@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "swipay-wl-serve",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "swipay-wl-serve"],
+      "port": 8080
+    }
+  ]
+}

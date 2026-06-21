@@ -1,0 +1,551 @@
+{% extends "base.html" %}
+
+{% block title %}Analyse: {{ data.filename }} – SwiPay WL Compare{% endblock %}
+
+{% block nav %}
+  <a href="{{ url_for('index') }}">&#8592; Neue Analyse</a>
+{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Page header ─────────────────────────── */
+  .page-header {
+    background: linear-gradient(135deg, var(--anthracite) 0%, var(--sig-blue) 100%);
+    padding: 2rem 1.5rem 5.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .page-header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 50% 80% at 90% 50%, rgba(190,94,72,.15) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .page-header .hex-bg {
+    position: absolute;
+    right: -30px;
+    top: -20px;
+    opacity: .06;
+    pointer-events: none;
+  }
+  .page-header .inner {
+    max-width: 1160px;
+    margin: 0 auto;
+    position: relative;
+  }
+  .page-header .eyebrow {
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--red);
+    margin-bottom: .5rem;
+  }
+  .page-header h1 {
+    font-size: clamp(1.3rem, 3vw, 1.9rem);
+    font-weight: 800;
+    color: var(--white);
+    margin-bottom: .35rem;
+  }
+  .page-header .meta-row {
+    font-size: .8rem;
+    color: rgba(255,255,255,.55);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.2rem;
+  }
+  .meta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+  }
+  .meta-chip svg { width: 13px; height: 13px; opacity: .7; }
+
+  /* ── Hero metrics ────────────────────────── */
+  .metrics-row {
+    max-width: 1160px;
+    margin: -3rem auto 0;
+    padding: 0 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    position: relative;
+    z-index: 10;
+  }
+  @media (max-width: 680px) { .metrics-row { grid-template-columns: 1fr; } }
+  .metric-card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 1.5rem 1.4rem 1.3rem;
+    box-shadow: var(--shadow-lg);
+    position: relative;
+    overflow: hidden;
+  }
+  .metric-card::after {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--red) 0%, var(--dark-red) 100%);
+  }
+  .metric-card.positive::after { background: linear-gradient(90deg, var(--sig-green) 0%, #7a8b3d 100%); }
+  .metric-label {
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: .6rem;
+  }
+  .metric-value {
+    font-size: clamp(1.5rem, 3vw, 2.1rem);
+    font-weight: 800;
+    color: var(--anthracite);
+    line-height: 1.1;
+    margin-bottom: .3rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric-value .unit {
+    font-size: .65em;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-left: .2em;
+  }
+  .metric-sub {
+    font-size: .78rem;
+    color: var(--text-muted);
+  }
+  .metric-delta {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    font-size: .8rem;
+    font-weight: 700;
+    padding: .2rem .6rem;
+    border-radius: 20px;
+    margin-top: .5rem;
+  }
+  .metric-delta.positive { background: #edf3dc; color: #5a6b2e; }
+  .metric-delta.negative { background: #fde9e5; color: var(--dark-red); }
+
+  /* ── Main content ────────────────────────── */
+  .content-wrap {
+    max-width: 1160px;
+    margin: 2.5rem auto 0;
+    padding: 0 1.5rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+
+  /* ── Section card ────────────────────────── */
+  .section-card {
+    background: var(--card);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.1rem 1.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-head h2 {
+    font-size: .95rem;
+    font-weight: 700;
+    color: var(--anthracite);
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+  }
+  .section-head h2 .badge {
+    font-size: .68rem;
+    font-weight: 600;
+    padding: .2rem .55rem;
+    border-radius: 20px;
+    background: #f0eee9;
+    color: var(--text-muted);
+    letter-spacing: .04em;
+  }
+
+  /* ── Data table ──────────────────────────── */
+  .table-scroll { overflow-x: auto; }
+  table.breakdown {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .82rem;
+  }
+  table.breakdown th {
+    background: var(--anthracite);
+    color: rgba(255,255,255,.85);
+    font-weight: 600;
+    font-size: .72rem;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: .65rem 1rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+  table.breakdown th:first-child { text-align: left; }
+  table.breakdown td {
+    padding: .6rem 1rem;
+    text-align: right;
+    border-bottom: 1px solid var(--border);
+    color: var(--anthracite);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  table.breakdown td:first-child {
+    text-align: left;
+    font-weight: 600;
+    color: var(--anthracite);
+  }
+  table.breakdown tbody tr:hover td { background: #faf8f6; }
+  table.breakdown .total-row td {
+    background: #f0eee9;
+    font-weight: 700;
+    border-top: 2px solid var(--anthracite);
+    border-bottom: none;
+  }
+  table.breakdown .total-row td:first-child { color: var(--anthracite); }
+  .delta-pos { color: var(--sig-green); font-weight: 700; }
+  .delta-neg { color: var(--red); font-weight: 700; }
+
+  /* ── Projection ──────────────────────────── */
+  .proj-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    margin: 0;
+  }
+  .proj-cell {
+    background: var(--card);
+    padding: 1.2rem 1.4rem;
+  }
+  .proj-cell .label {
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: .3rem;
+  }
+  .proj-row {
+    display: flex;
+    align-items: baseline;
+    gap: .6rem;
+  }
+  .proj-actual {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--anthracite);
+    font-variant-numeric: tabular-nums;
+  }
+  .proj-arrow { font-size: .8rem; color: var(--text-muted); }
+  .proj-target {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--red);
+    font-variant-numeric: tabular-nums;
+  }
+  .proj-unit { font-size: .75rem; color: var(--text-muted); }
+
+  /* ── Downloads ───────────────────────────── */
+  .downloads-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem;
+    padding: 1.3rem 1.4rem;
+  }
+  .dl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .6rem 1.1rem;
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-family: 'Saira', sans-serif;
+    font-size: .82rem;
+    font-weight: 600;
+    color: var(--anthracite);
+    text-decoration: none;
+    transition: all .18s;
+  }
+  .dl-btn:hover {
+    border-color: var(--red);
+    color: var(--red);
+    background: #fff5f3;
+  }
+  .dl-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+  .dl-btn.pdf { background: #fff5f3; border-color: var(--red); color: var(--dark-red); }
+  .dl-btn.pdf:hover { background: var(--red); color: white; }
+
+  /* ── Disclaimer ──────────────────────────── */
+  .disclaimer-banner {
+    max-width: 1160px;
+    margin: 1.5rem auto 0;
+    padding: 0 1.5rem;
+  }
+  .disclaimer-banner p {
+    background: #fff8f6;
+    border: 1px solid #f0ddd8;
+    border-left: 3px solid var(--red);
+    border-radius: 0 6px 6px 0;
+    padding: .75rem 1rem;
+    font-size: .78rem;
+    color: var(--text-muted);
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+{# ── Page header ─────────────────────────────────────────────── #}
+<div class="page-header">
+  <svg class="hex-bg" width="320" height="320" viewBox="0 0 100 100" fill="none" stroke="white" stroke-width="1">
+    <polygon points="50,5 93,27.5 93,72.5 50,95 7,72.5 7,27.5"/>
+  </svg>
+  <div class="inner">
+    <div class="eyebrow">Analyseergebnis</div>
+    <h1>{{ data.filename }}</h1>
+    <div class="meta-row">
+      <span class="meta-chip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        {{ data.period }}
+      </span>
+      <span class="meta-chip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+          <line x1="8" y1="18" x2="21" y2="18"/>
+          <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/>
+          <line x1="3" y1="18" x2="3.01" y2="18"/>
+        </svg>
+        {{ data.tx_count | intfmt }} Transaktionen
+      </span>
+      {% if data.proj %}
+      <span class="meta-chip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        Hochrechnung auf {{ data.project_days }} Tage
+      </span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── Hero metrics ─────────────────────────────────────────────── #}
+<div class="metrics-row">
+  <div class="metric-card">
+    <div class="metric-label">Worldline Netto</div>
+    <div class="metric-value">{{ data.wl_net | chf }}<span class="unit">CHF</span></div>
+    <div class="metric-sub">Gebühren {{ data.wl_fee | chf }} &minus; Cashback {{ data.wl_dcc | chf }} CHF</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">SwiPay Netto</div>
+    <div class="metric-value">{{ data.sp_net | chf }}<span class="unit">CHF</span></div>
+    <div class="metric-sub">Gebühren {{ data.sp_fee | chf }} &minus; Cashback {{ data.sp_cashback | chf }} CHF</div>
+  </div>
+  <div class="metric-card positive">
+    <div class="metric-label">Differenz (WL &minus; SP)</div>
+    <div class="metric-value">{{ data.delta | chf }}<span class="unit">CHF</span></div>
+    <div class="metric-sub">
+      <span class="metric-delta {% if data.delta >= 0 %}positive{% else %}negative{% endif %}">
+        {% if data.delta >= 0 %}&#x2193;{% else %}&#x2191;{% endif %}
+        {{ data.delta_pct | abs | round(1) }} %
+      </span>
+    </div>
+  </div>
+</div>
+
+{# ── Content ──────────────────────────────────────────────────── #}
+<div class="content-wrap">
+
+  {# Breakdown nach Kategorie #}
+  <div class="section-card">
+    <div class="section-head">
+      <h2>Nach Karten-Kategorie <span class="badge">Ist-Werte</span></h2>
+    </div>
+    <div class="table-scroll">
+      <table class="breakdown">
+        <thead>
+          <tr>
+            <th>Kategorie</th>
+            {% for row in data.by_cat %}{% if loop.first %}{% for k, v in row.items() %}{% if k != 'Karten Kategorie' %}<th>{{ k }}</th>{% endif %}{% endfor %}{% endif %}{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data.by_cat %}
+          <tr {% if row['Karten Kategorie'] == 'TOTAL' %}class="total-row"{% endif %}>
+            <td>{{ row['Karten Kategorie'] }}</td>
+            {% for k, v in row.items() %}
+            {% if k != 'Karten Kategorie' %}
+            <td class="{% if k == 'Differenz Netto CHF' %}{% if v|float >= 0 %}delta-pos{% else %}delta-neg{% endif %}{% endif %}">
+              {% if v is number %}{{ v | chf }}{% else %}{{ v }}{% endif %}
+            </td>
+            {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# Breakdown nach Brand #}
+  <div class="section-card">
+    <div class="section-head">
+      <h2>Nach Brand <span class="badge">Ist-Werte</span></h2>
+    </div>
+    <div class="table-scroll">
+      <table class="breakdown">
+        <thead>
+          <tr>
+            <th>Brand</th>
+            {% for row in data.by_brand %}{% if loop.first %}{% for k, v in row.items() %}{% if k != 'Brand' %}<th>{{ k }}</th>{% endif %}{% endfor %}{% endif %}{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data.by_brand %}
+          <tr {% if row['Brand'] == 'TOTAL' %}class="total-row"{% endif %}>
+            <td>{{ row['Brand'] }}</td>
+            {% for k, v in row.items() %}
+            {% if k != 'Brand' %}
+            <td class="{% if k == 'Differenz Netto CHF' %}{% if v|float >= 0 %}delta-pos{% else %}delta-neg{% endif %}{% endif %}">
+              {% if v is number %}{{ v | chf }}{% else %}{{ v }}{% endif %}
+            </td>
+            {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# Hochrechnung #}
+  {% if data.proj %}
+  <div class="section-card">
+    <div class="section-head">
+      <h2>
+        Hochrechnung
+        <span class="badge">{{ data.proj.actual_days }} &rarr; {{ data.proj.target_days }} Tage &nbsp;&middot;&nbsp; Faktor {{ data.proj.scale_factor }}x</span>
+      </h2>
+    </div>
+    <div class="proj-grid">
+      <div class="proj-cell">
+        <div class="label">Transaktionen</div>
+        <div class="proj-row">
+          <span class="proj-actual">{{ data.proj.tx_count_actual | int | intfmt }}</span>
+          <span class="proj-arrow">&rarr;</span>
+          <span class="proj-target">{{ data.proj.tx_count_proj | int | intfmt }}</span>
+        </div>
+      </div>
+      <div class="proj-cell">
+        <div class="label">WL Netto</div>
+        <div class="proj-row">
+          <span class="proj-actual">{{ data.proj.wl_net_actual | chf }}</span>
+          <span class="proj-arrow">&rarr;</span>
+          <span class="proj-target">{{ data.proj.wl_net_proj | chf }}</span>
+          <span class="proj-unit">CHF</span>
+        </div>
+      </div>
+      <div class="proj-cell">
+        <div class="label">SP Netto</div>
+        <div class="proj-row">
+          <span class="proj-actual">{{ data.proj.sp_net_actual | chf }}</span>
+          <span class="proj-arrow">&rarr;</span>
+          <span class="proj-target">{{ data.proj.sp_net_proj | chf }}</span>
+          <span class="proj-unit">CHF</span>
+        </div>
+      </div>
+      <div class="proj-cell">
+        <div class="label">Differenz (proj.)</div>
+        <div class="proj-row">
+          <span class="proj-actual">{{ data.proj.delta_actual | chf }}</span>
+          <span class="proj-arrow">&rarr;</span>
+          <span class="proj-target">{{ data.proj.delta_proj | chf }}</span>
+          <span class="proj-unit">CHF &nbsp;({{ data.proj.delta_pct }} %)</span>
+        </div>
+      </div>
+    </div>
+
+    {% if data.proj_by_cat %}
+    <div class="table-scroll" style="border-top:1px solid var(--border)">
+      <table class="breakdown">
+        <thead>
+          <tr>
+            <th>Kategorie</th>
+            {% for row in data.proj_by_cat %}{% if loop.first %}{% for k, v in row.items() %}{% if k != 'Karten Kategorie' %}<th>{{ k }}</th>{% endif %}{% endfor %}{% endif %}{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data.proj_by_cat %}
+          <tr {% if row['Karten Kategorie'] == 'TOTAL' %}class="total-row"{% endif %}>
+            <td>{{ row['Karten Kategorie'] }}</td>
+            {% for k, v in row.items() %}
+            {% if k != 'Karten Kategorie' %}
+            <td class="{% if 'Differenz' in k %}{% if v|float >= 0 %}delta-pos{% else %}delta-neg{% endif %}{% endif %}">
+              {% if v is number %}{{ v | chf }}{% else %}{{ v }}{% endif %}
+            </td>
+            {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# Downloads #}
+  {% if downloads %}
+  <div class="section-card">
+    <div class="section-head">
+      <h2>Downloads</h2>
+    </div>
+    <div class="downloads-grid">
+      {% for dl in downloads %}
+      <a href="{{ url_for('download', sid=sid, filename=dl.filename) }}"
+         class="dl-btn {% if '.pdf' in dl.filename %}pdf{% endif %}">
+        {% if '.pdf' in dl.filename %}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        {% else %}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        {% endif %}
+        {{ dl.label }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<div class="disclaimer-banner">
+  <p>
+    <strong>Hinweis:</strong> Die verwendeten Parameter sind illustrativ und entsprechen
+    NICHT der echten SwiPay-Preisliste. Dieses Tool dient ausschliesslich dem internen Gebrauch.
+    Vertraulich – nicht weitergeben.
+  </p>
+</div>
+{% endblock %}
