@@ -9,6 +9,7 @@ from pathlib import Path
 from .engine import run_engine
 from .loader import load_file
 from .logging_setup import setup_logging
+from .pdf_report import to_pdf
 from .report import build_breakdown, to_csv, to_html
 
 logger = logging.getLogger(__name__)
@@ -146,10 +147,22 @@ def main() -> None:
         meta=meta,
     )
 
+    _COL_W = [42, 20, 32, 32, 36, 26]
+    to_pdf(
+        {
+            "Nach Karten-Kategorie": (by_cat,   "Karten Kategorie", _COL_W),
+            "Nach Brand":            (by_brand,  "Brand",            _COL_W),
+        },
+        out_dir / f"{stem}_report.pdf",
+        title=f"SwiPay-Vergleich {stem}",
+        meta=meta,
+    )
+
     print(f"\n6) REPORTS gespeichert in '{out_dir}/'")
     print(f"   {stem}_nach_kategorie.csv")
     print(f"   {stem}_nach_brand.csv")
     print(f"   {stem}_report.html")
+    print(f"   {stem}_report.pdf")
 
     logger.info(
         "Run complete — WL net=%.2f CHF, SP net=%.2f CHF, delta=%.2f CHF",
