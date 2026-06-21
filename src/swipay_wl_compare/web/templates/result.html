@@ -310,8 +310,15 @@
     <polygon points="50,5 93,27.5 93,72.5 50,95 7,72.5 7,27.5"/>
   </svg>
   <div class="inner">
-    <div class="eyebrow">Analyseergebnis</div>
+    <div class="eyebrow">Analyseergebnis{% if data.source_files and data.source_files|length > 1 %} · {{ data.source_files|length }} Dateien zusammengeführt{% endif %}</div>
     <h1>{{ data.filename }}</h1>
+    {% if data.source_files and data.source_files|length > 1 %}
+    <div style="margin-bottom:.6rem;display:flex;flex-wrap:wrap;gap:.4rem">
+      {% for fname in data.source_files %}
+      <span style="font-size:.73rem;background:rgba(255,255,255,.12);color:rgba(255,255,255,.75);padding:.2rem .6rem;border-radius:20px;font-weight:500">{{ fname }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
     <div class="meta-row">
       <span class="meta-chip">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

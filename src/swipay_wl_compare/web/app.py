@@ -7,6 +7,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
+import pandas as pd
 from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 
@@ -39,7 +40,7 @@ def _fmt_chf(value: object) -> str:
 def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = os.urandom(24)
-    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+    app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB (multi-file)
     _UPLOAD_DIR.mkdir(exist_ok=True)
 
     app.jinja_env.filters["chf"] = _fmt_chf
@@ -59,14 +60,16 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     @app.route("/analyse", methods=["POST"])
     def analyse():
-        f = request.files.get("file")
-        if not f or not f.filename:
+        files = request.files.getlist("file")
+        files = [f for f in files if f and f.filename]
+        if not files:
             flash("Keine Datei ausgewählt.")
             return redirect(url_for("index"))
 
-        ext = Path(f.filename).suffix.lower()
-        if ext not in _ALLOWED_EXT:
-            flash(f"Ungültiger Dateityp «{ext}» – bitte .xlsb oder .csv hochladen.")
+        bad_exts = [Path(f.filename).suffix.lower() for f in files
+                    if Path(f.filename).suffix.lower() not in _ALLOWED_EXT]
+        if bad_exts:
+            flash("Ungültiger Dateityp – bitte nur .xlsb oder .csv hochladen.")
             return redirect(url_for("index"))
 
         project_days = max(1, int(request.form.get("project_days") or 365))
@@ -74,12 +77,21 @@ def create_app() -> Flask:
         sid_dir = _UPLOAD_DIR / sid
         sid_dir.mkdir()
 
-        safe_name = secure_filename(f.filename)
-        upload_path = sid_dir / safe_name
-        f.save(str(upload_path))
+        saved: list[Path] = []
+        for f in files:
+            safe = secure_filename(f.filename)
+            dest = sid_dir / safe
+            f.save(str(dest))
+            saved.append(dest)
+
+        if len(saved) == 1:
+            safe_name = saved[0].name
+        else:
+            safe_name = f"{len(saved)}_Dateien_zusammengefuehrt"
 
         try:
-            df = load_file(upload_path)
+            frames = [load_file(p) for p in saved]
+            df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
             eng = run_engine(df)
         except Exception as exc:
             flash(f"Fehler beim Laden der Datei: {exc}")
@@ -144,8 +156,10 @@ def create_app() -> Flask:
             cols = [group_col] + [c for c in _DISPLAY_COLS if c in df_src.columns]
             return df_src[cols].to_dict("records")
 
+        source_files = [p.name for p in saved]
         summary = {
             "filename":     safe_name,
+            "source_files": source_files,
             "stem":         stem,
             "tx_count":     len(df),
             "period":       period_str,

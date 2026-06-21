@@ -268,10 +268,10 @@
 
 <div class="upload-wrap">
   <div class="upload-card">
-    <h2>Export-Datei analysieren</h2>
+    <h2>Export-Dateien analysieren</h2>
     <form method="POST" action="{{ url_for('analyse') }}" enctype="multipart/form-data" id="upload-form">
       <div class="drop-zone" id="drop-zone">
-        <input type="file" name="file" id="file-input" accept=".xlsb,.csv" required>
+        <input type="file" name="file" id="file-input" accept=".xlsb,.csv" multiple required>
         <div class="drop-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -279,8 +279,8 @@
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
         </div>
-        <p class="drop-label">Datei hier ablegen oder klicken</p>
-        <p class="drop-hint">Unterstützt: <strong>.xlsb</strong> · <strong>.csv</strong> &nbsp;|&nbsp; max. 50 MB</p>
+        <p class="drop-label">Dateien hier ablegen oder klicken</p>
+        <p class="drop-hint">Unterstützt: <strong>.xlsb</strong> · <strong>.csv</strong> &nbsp;|&nbsp; Mehrere Dateien möglich &nbsp;|&nbsp; max. 200 MB</p>
         <div id="file-name"></div>
       </div>
 
@@ -347,16 +347,22 @@
   const spinner    = document.getElementById('spinner');
   const form       = document.getElementById('upload-form');
 
-  function onFileSelected(file) {
-    if (!file) return;
-    fileNameEl.textContent = '✓ ' + file.name;
+  function onFilesSelected(files) {
+    if (!files || files.length === 0) return;
     dropZone.classList.add('has-file');
     submitBtn.disabled = false;
-    btnLabel.textContent = 'Jetzt analysieren';
+    if (files.length === 1) {
+      fileNameEl.textContent = '✓ ' + files[0].name;
+      btnLabel.textContent = 'Jetzt analysieren';
+    } else {
+      const names = Array.from(files).map(f => f.name).join(', ');
+      fileNameEl.textContent = '✓ ' + files.length + ' Dateien: ' + names;
+      btnLabel.textContent = files.length + ' Dateien zusammen analysieren';
+    }
   }
 
   fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) onFileSelected(fileInput.files[0]);
+    if (fileInput.files.length > 0) onFilesSelected(fileInput.files);
   });
 
   dropZone.addEventListener('dragover', e => {
@@ -367,12 +373,11 @@
   dropZone.addEventListener('drop', e => {
     e.preventDefault();
     dropZone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) {
+    if (e.dataTransfer.files.length > 0) {
       const dt = new DataTransfer();
-      dt.items.add(file);
+      Array.from(e.dataTransfer.files).forEach(f => dt.items.add(f));
       fileInput.files = dt.files;
-      onFileSelected(file);
+      onFilesSelected(dt.files);
     }
   });
 
