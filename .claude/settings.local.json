@@ -25,7 +25,8 @@
       "mcp__plugin_brand-voice_atlassian__searchConfluenceUsingCql",
       "mcp__plugin_brand-voice_atlassian__getConfluencePage",
       "mcp__plugin_brand-voice_atlassian__getConfluenceSpaces",
-      "mcp__plugin_brand-voice_atlassian__createConfluencePage"
+      "mcp__plugin_brand-voice_atlassian__createConfluencePage",
+      "mcp__Claude_in_Chrome__navigate"
     ]
   }
 }
