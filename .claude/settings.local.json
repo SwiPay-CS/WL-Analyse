@@ -19,7 +19,8 @@
       "Bash(uv sync *)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080/)",
       "Bash(pkill -f \"swipay-wl-serve\")",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s http://localhost:8080/result/3f81a2ef-98ea-46a9-afce-8e2b9f01f1e2)"
     ]
   }
 }
