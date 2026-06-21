@@ -15,6 +15,9 @@ data/*
 *.xlsb
 *.csv
 
+# Generated reports (may contain aggregated customer data)
+output/
+
 # OS / editor
 .DS_Store
 .idea/

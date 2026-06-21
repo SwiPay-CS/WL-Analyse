@@ -130,8 +130,11 @@ def run_engine(df: pd.DataFrame) -> pd.DataFrame:
     # --- DCC cashback: separate credit AFTER floor ---
     cashback = np.where(dcc & offerable & ~is_refund, dcc_pct * brutto, 0.0)
 
-    # --- Non-offerable brands: mirror Worldline, delta = 0 ---
-    sp_fee = np.where(offerable, fee_total, pf + sf + ic)
+    # --- Non-offerable brands: mirror Worldline using total Gebühren, delta = 0 ---
+    # Use -Gebühren instead of pf+sf+ic so brands that don't break fees into
+    # components (e.g. TWINT) still produce sp_net == wl_net and delta == 0.
+    wl_fee_total = (-df["Gebühren"]).fillna(0.0).to_numpy(float)
+    sp_fee = np.where(offerable, fee_total, wl_fee_total)
     sp_cashback = np.where(offerable, cashback, wl_dcc_cashback)
     sp_net = sp_fee - sp_cashback
 

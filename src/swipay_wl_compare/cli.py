@@ -9,6 +9,7 @@ from pathlib import Path
 from .engine import run_engine
 from .loader import load_file
 from .logging_setup import setup_logging
+from .report import build_breakdown, to_csv, to_html
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,11 @@ def main() -> None:
         help="Pfad zur Worldline-Exportdatei (.xlsb oder .csv)",
     )
     parser.add_argument(
+        "--output-dir",
+        default="output",
+        help="Ordner für CSV- und HTML-Reports (Standard: output/)",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -60,6 +66,9 @@ def main() -> None:
     if not path.exists():
         print(f"Fehler: Datei nicht gefunden: {path}", file=sys.stderr)
         sys.exit(1)
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         df = load_file(path)
@@ -92,7 +101,7 @@ def main() -> None:
     sp_cashback = float(eng["sp_cashback"].sum())
     sp_net = sp_fee - sp_cashback
 
-    print("\n3) SWIPAY (illustrative Parameter — NICHT die echte Preisliste)")
+    print("\n3) SWIPAY (Parameter — NICHT die echte Preisliste)")
     print(
         f"   Gebühren:  {sp_fee:>12,.2f} CHF | "
         f"DCC-Cashback: {sp_cashback:>10,.2f} CHF | "
@@ -116,6 +125,31 @@ def main() -> None:
         f"SwiPay-Cashback total: {sp_cashback:,.2f} CHF | "
         f"Worldline-Cashback: {wl_dcc:,.2f} CHF"
     )
+
+    # --- Reports ---
+    stem = path.stem
+    meta = f"Quelle: {path.name} | {len(df):,} Transaktionen | Parameter: SwiPay"
+
+    by_cat = build_breakdown(df, eng, "Karten Kategorie")
+    by_brand = build_breakdown(df, eng, "Brand")
+
+    to_csv(by_cat,   out_dir / f"{stem}_nach_kategorie.csv")
+    to_csv(by_brand, out_dir / f"{stem}_nach_brand.csv")
+
+    to_html(
+        {
+            "Nach Karten-Kategorie": by_cat,
+            "Nach Brand":           by_brand,
+        },
+        out_dir / f"{stem}_report.html",
+        filename=f"SwiPay-Vergleich {stem}",
+        meta=meta,
+    )
+
+    print(f"\n6) REPORTS gespeichert in '{out_dir}/'")
+    print(f"   {stem}_nach_kategorie.csv")
+    print(f"   {stem}_nach_brand.csv")
+    print(f"   {stem}_report.html")
 
     logger.info(
         "Run complete — WL net=%.2f CHF, SP net=%.2f CHF, delta=%.2f CHF",
