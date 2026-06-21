@@ -514,6 +514,39 @@
   </div>
   {% endif %}
 
+  {# Verwendete Konditionen #}
+  {% if data.params_used %}
+  <div class="section-card">
+    <div class="section-head">
+      <h2>Verwendete SwiPay Konditionen <span class="badge">dieser Analyse</span></h2>
+    </div>
+    <div class="table-scroll">
+      <table class="breakdown" style="font-size:.8rem">
+        <thead>
+          <tr>
+            <th>Kategorie</th>
+            <th>ASF %</th>
+            <th>ASF fix</th>
+            <th>Mindestgebühr</th>
+            <th>DCC-Cashback</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in data.params_used %}
+          <tr>
+            <td>{{ p.category }}</td>
+            <td>{{ p.asf_pct }} %</td>
+            <td>{{ p.asf_fix | chf }} CHF</td>
+            <td>{{ p.min_fee | chf }} CHF</td>
+            <td>{{ p.dcc_pct }} %</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   {# Downloads #}
   {% if downloads %}
   <div class="section-card">
@@ -550,8 +583,7 @@
 
 <div class="disclaimer-banner">
   <p>
-    <strong>Hinweis:</strong> Die verwendeten Parameter sind illustrativ und entsprechen
-    NICHT der echten SwiPay-Preisliste. Dieses Tool dient ausschliesslich dem internen Gebrauch.
+    <strong>Intern:</strong> Dieses Tool dient ausschliesslich dem internen Gebrauch.
     Vertraulich – nicht weitergeben.
   </p>
 </div>

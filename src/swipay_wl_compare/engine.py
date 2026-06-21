@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .params import DEFAULT_CATEGORY, NON_OFFERABLE, PARAMS, get_params
+from .params import DEFAULT_CATEGORY, NON_OFFERABLE, PARAMS, BrandParams, get_params
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,10 @@ def compute_swipay(
     return TxResult(asf_new, fee_total, cashback, net_cost, floored, offerable=True)
 
 
-def run_engine(df: pd.DataFrame) -> pd.DataFrame:
+def run_engine(
+    df: pd.DataFrame,
+    custom_params: dict[str, BrandParams] | None = None,
+) -> pd.DataFrame:
     """Vectorised SwiPay engine for a full Worldline export DataFrame.
 
     Expected input columns (exact Worldline export names):
@@ -77,7 +80,12 @@ def run_engine(df: pd.DataFrame) -> pd.DataFrame:
 
     Returns a DataFrame with columns:
         sp_fee, sp_cashback, sp_net, floored, offerable
+
+    Pass *custom_params* (built via build_params_table()) to override the
+    module-level defaults for a single analysis run.
     """
+    p_table: dict[str, BrandParams] = custom_params if custom_params is not None else PARAMS
+
     brutto = df["Bruttobetrag"].to_numpy(float)
     sf = df["Scheme Fee"].abs().fillna(0.0).to_numpy(float)
     ic = df["Interchange"].abs().fillna(0.0).to_numpy(float)
@@ -94,11 +102,11 @@ def run_engine(df: pd.DataFrame) -> pd.DataFrame:
     )
     offerable = ~np.isin(brand_col, list(NON_OFFERABLE))
 
-    default_p = PARAMS[DEFAULT_CATEGORY]
+    default_p = p_table.get(DEFAULT_CATEGORY, PARAMS[DEFAULT_CATEGORY])
 
     def _pick(attr: str) -> np.ndarray:
         default_val = getattr(default_p, attr)
-        mapping = {k: getattr(v, attr) for k, v in PARAMS.items()}
+        mapping = {k: getattr(v, attr) for k, v in p_table.items()}
         return np.array([mapping.get(c, default_val) for c in cat], dtype=float)
 
     asf_pct = _pick("asf_pct")
@@ -109,7 +117,7 @@ def run_engine(df: pd.DataFrame) -> pd.DataFrame:
     # ic_cap is optional; build a per-row cap array (np.inf = no cap).
     ic_cap_vals = np.array(
         [
-            (getattr(PARAMS.get(c, default_p), "ic_cap") or float("inf"))
+            (getattr(p_table.get(c, default_p), "ic_cap") or float("inf"))
             for c in cat
         ],
         dtype=float,

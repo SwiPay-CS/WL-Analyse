@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 # Brands SwiPay does not offer — caller mirrors Worldline cost, delta = 0.
 NON_OFFERABLE: frozenset[str] = frozenset({"TWINT"})
@@ -9,14 +10,13 @@ NON_OFFERABLE: frozenset[str] = frozenset({"TWINT"})
 # Category key used when the export value is unknown.
 DEFAULT_CATEGORY = "Credit"
 
+# Ordered category list — used for UI rendering and form parsing.
+CATEGORIES: tuple[str, ...] = ("Debit", "Credit", "Commercial")
+
 
 @dataclass(frozen=True)
 class BrandParams:
-    """SwiPay fee parameters per brand or card category.
-
-    NOTE: all example values in PARAMS below are ILLUSTRATIVE —
-    they are NOT the real SwiPay price list.
-    """
+    """SwiPay fee parameters per brand or card category."""
 
     asf_pct: float              # ASF as fraction of gross amount (e.g. 0.0035 = 0.35 %)
     asf_fix: float = 0.0        # Fixed ASF surcharge per transaction, CHF
@@ -25,33 +25,28 @@ class BrandParams:
     ic_cap: float | None = None     # Optional interchange cap, CHF (None = no cap)
 
 
-# ---------------------------------------------------------------------------
-# ILLUSTRATIVE parameter table — replace with real SwiPay pricing before use.
+# Default SwiPay parameter table.
 # Key = "Karten Kategorie" column value from the Worldline export.
-# ---------------------------------------------------------------------------
+# Commercial shares ASF with Credit; the differentiation vs. Debit/Credit
+# comes entirely from ICF and CSF, which are passed through from the CSV.
 PARAMS: dict[str, BrandParams] = {
     "Debit": BrandParams(
-        asf_pct=0.0008,
+        asf_pct=0.0035,
         asf_fix=0.01,
-        min_fee=0.00,
-        dcc_cashback_pct=0.0185,
-        ic_cap=None,
+        min_fee=0.15,
+        dcc_cashback_pct=0.015,
     ),
     "Credit": BrandParams(
-        asf_pct=0.0016,
+        asf_pct=0.0040,
         asf_fix=0.01,
-        min_fee=0.00,
-        dcc_cashback_pct=0.0185,
-        ic_cap=None,
+        min_fee=0.20,
+        dcc_cashback_pct=0.015,
     ),
-    # Commercial cards carry no separate rate; Credit is used as conservative fallback.
-    # The Worldline export does not split Commercial into Debit/Credit sub-categories.
     "Commercial": BrandParams(
-        asf_pct=0.0016,
+        asf_pct=0.0040,
         asf_fix=0.01,
-        min_fee=0.00,
-        dcc_cashback_pct=0.0185,
-        ic_cap=None,
+        min_fee=0.20,
+        dcc_cashback_pct=0.015,
     ),
 }
 
@@ -59,3 +54,50 @@ PARAMS: dict[str, BrandParams] = {
 def get_params(category: str) -> BrandParams:
     """Return BrandParams for *category*, falling back to Credit if unknown."""
     return PARAMS.get(category, PARAMS[DEFAULT_CATEGORY])
+
+
+def build_params_table(form_data: dict[str, Any]) -> dict[str, BrandParams]:
+    """Build a PARAMS table from user-submitted form data (Flask request.form).
+
+    Form field names:  asf_pct_{cat}   (%, e.g. "0.35")
+                       asf_fix_{cat}   (CHF)
+                       min_fee_{cat}   (CHF)
+                       dcc_pct_{cat}   (%, e.g. "1.5")
+    Where {cat} is "debit", "credit", or "commercial".
+    Missing or invalid fields fall back to the module-level defaults in PARAMS.
+    """
+
+    def _f(key: str, fallback: float) -> float:
+        try:
+            return float(form_data.get(key, fallback))
+        except (ValueError, TypeError):
+            return fallback
+
+    result: dict[str, BrandParams] = {}
+    for cat in ("Debit", "Credit"):
+        k = cat.lower()
+        d = PARAMS[cat]
+        result[cat] = BrandParams(
+            asf_pct=_f(f"asf_pct_{k}", d.asf_pct * 100) / 100,
+            asf_fix=_f(f"asf_fix_{k}", d.asf_fix),
+            min_fee=_f(f"min_fee_{k}", d.min_fee),
+            dcc_cashback_pct=_f(f"dcc_pct_{k}", d.dcc_cashback_pct * 100) / 100,
+        )
+    # Commercial shares ASF/fees with Credit; differentiation is via ICF/CSF from the CSV.
+    result["Commercial"] = result["Credit"]
+    return result
+
+
+def params_to_display(p_table: dict[str, BrandParams]) -> list[dict]:
+    """Return a list of dicts suitable for Jinja2 rendering."""
+    rows = []
+    for cat in CATEGORIES:
+        p = p_table.get(cat, PARAMS[cat])
+        rows.append({
+            "category": cat,
+            "asf_pct": round(p.asf_pct * 100, 4),
+            "asf_fix": p.asf_fix,
+            "min_fee": p.min_fee,
+            "dcc_pct": round(p.dcc_cashback_pct * 100, 4),
+        })
+    return rows

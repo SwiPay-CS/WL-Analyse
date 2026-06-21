@@ -14,6 +14,7 @@ from werkzeug.utils import secure_filename
 from ..engine import run_engine
 from ..loader import load_file
 from ..logging_setup import setup_logging
+from ..params import build_params_table, params_to_display
 from ..pdf_report import to_pdf
 from ..projection import detect_period, project_breakdown, project_summary
 from ..report import build_breakdown, to_csv
@@ -73,6 +74,7 @@ def create_app() -> Flask:
             return redirect(url_for("index"))
 
         project_days = max(1, int(request.form.get("project_days") or 365))
+        custom_params = build_params_table(request.form)
         sid = str(uuid.uuid4())
         sid_dir = _UPLOAD_DIR / sid
         sid_dir.mkdir()
@@ -92,7 +94,7 @@ def create_app() -> Flask:
         try:
             frames = [load_file(p) for p in saved]
             df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-            eng = run_engine(df)
+            eng = run_engine(df, custom_params=custom_params)
         except Exception as exc:
             flash(f"Fehler beim Laden der Datei: {exc}")
             return redirect(url_for("index"))
@@ -158,6 +160,7 @@ def create_app() -> Flask:
 
         source_files = [p.name for p in saved]
         summary = {
+            "params_used": params_to_display(custom_params),
             "filename":     safe_name,
             "source_files": source_files,
             "stem":         stem,
