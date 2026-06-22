@@ -1,0 +1,17 @@
+[project]
+name = "swipay-wl-compare"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas>=3.0",
+    "pyxlsb>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

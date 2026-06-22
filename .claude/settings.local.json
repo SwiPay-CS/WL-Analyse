@@ -27,7 +27,9 @@
       "mcp__plugin_brand-voice_atlassian__getConfluenceSpaces",
       "mcp__plugin_brand-voice_atlassian__createConfluencePage",
       "mcp__Claude_in_Chrome__navigate",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(uv pip *)",
+      "Bash(uv add *)"
     ]
   }
 }

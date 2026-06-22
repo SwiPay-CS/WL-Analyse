@@ -12,8 +12,16 @@ import pandas as pd
 from engine import ParamTable, Offer
 
 
-def run_comparison(df: pd.DataFrame, params: ParamTable, offer: Offer) -> pd.DataFrame:
+def run_comparison(
+    df: pd.DataFrame,
+    params: ParamTable,
+    offer: Offer,
+    dcc_cashback_pct: float,
+) -> pd.DataFrame:
     """Erwartet normalisierte Spalten (siehe loader.NORMALIZED_COLUMNS).
+
+    dcc_cashback_pct ist ein globaler Satz (z.B. 0.014 = 1.4%), gilt fuer
+    alle Brands gleichermassen.
 
     Liefert je Zeile wl_fee, wl_cashback, wl_net, sp_fee, sp_cashback, sp_net,
     floored, offerable.
@@ -35,7 +43,7 @@ def run_comparison(df: pd.DataFrame, params: ParamTable, offer: Offer) -> pd.Dat
         return np.array([getattr(params.resolve(c), attr) for c in cat], float)
 
     asf_pct, asf_fix = col("asf_pct"), col("asf_fix")
-    min_fee, dcc_pct = col("min_fee"), col("dcc_cashback_pct")
+    min_fee = col("min_fee")
 
     # Normal case.
     asf = asf_pct * brutto + asf_fix
@@ -47,8 +55,8 @@ def run_comparison(df: pd.DataFrame, params: ParamTable, offer: Offer) -> pd.Dat
     refund_fee = -(asf_pct * np.abs(brutto) + asf_fix + sf + ic)
     sp_fee = np.where(is_refund & offerable, refund_fee, sp_fee)
 
-    # DCC cashback after floor, separate.
-    sp_cashback = np.where(is_dcc & offerable & ~is_refund, dcc_pct * brutto, 0.0)
+    # DCC cashback after floor, separate (global rate).
+    sp_cashback = np.where(is_dcc & offerable & ~is_refund, dcc_cashback_pct * brutto, 0.0)
 
     # Worldline baseline straight from the raw signed total (source of truth).
     # gebuehren is negative for a cost, positive for a credit (refund).

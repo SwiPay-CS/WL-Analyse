@@ -22,16 +22,17 @@ from dataclasses import dataclass
 class BrandParams:
     """SwiPay-Konditionen je Brand bzw. Kategorie.
 
-    asf_pct          ASF-Anteil vom Bruttobetrag (0.0011 = 0.11%)
-    asf_fix          nominaler ASF-Zuschlag je Transaktion, CHF
-    min_fee          Mindestgebuehr auf ASF+ICF+CSF, CHF
-    dcc_cashback_pct Cashback-Anteil vom Umsatz bei DCC, CHF-Anteil
-    ic_cap           optionaler Interchange-Cap je TRX, CHF (None = kein Cap)
+    asf_pct  ASF-Anteil vom Bruttobetrag (0.0011 = 0.11%)
+    asf_fix  nominaler ASF-Zuschlag je Transaktion, CHF
+    min_fee  Mindestgebuehr auf ASF+ICF+CSF, CHF
+    ic_cap   optionaler Interchange-Cap je TRX, CHF (None = kein Cap)
+
+    DCC-Cashback ist ein globaler Satz, nicht je Kategorie — wird als
+    eigenes Argument an swipay_fee() / run_comparison() uebergeben.
     """
     asf_pct: float
     asf_fix: float = 0.0
     min_fee: float = 0.0
-    dcc_cashback_pct: float = 0.0
     ic_cap: float | None = None
 
 
@@ -79,9 +80,10 @@ class FeeResult:
 
 def swipay_fee(
     brutto: float,
-    scheme_fee: float,      # positive Magnitude, Pass-through (= Worldline)
-    interchange: float,     # positive Magnitude, Pass-through (= Worldline)
+    scheme_fee: float,          # positive Magnitude, Pass-through (= Worldline)
+    interchange: float,         # positive Magnitude, Pass-through (= Worldline)
     params: BrandParams,
+    dcc_cashback_pct: float,    # global rate, same for all brands/categories
     is_dcc: bool,
     is_refund: bool,
     offerable: bool,
@@ -119,7 +121,7 @@ def swipay_fee(
     else:
         fee_total = fee_before
 
-    cashback = params.dcc_cashback_pct * brutto if is_dcc else 0.0
+    cashback = dcc_cashback_pct * brutto if is_dcc else 0.0
     net_cost = fee_total - cashback
     return FeeResult(asf, fee_total, cashback, net_cost, floored, offerable=True)
 
