@@ -15,6 +15,9 @@ data/*
 *.xlsb
 *.csv
 
+# SQLite databases (contain file hashes and audit metadata)
+*.db
+
 # Generated reports (may contain aggregated customer data)
 output/
 
