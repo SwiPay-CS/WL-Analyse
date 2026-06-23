@@ -21,6 +21,7 @@ from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
 from projection import project_tier_b, CoverageLabel
 from db_groups import init_groups_db, get_groups, assign_group, unassign_group
+from reporter import build_pdf, build_csv
 
 # ── Page setup ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -506,3 +507,102 @@ with tab_monthly:
         st.line_chart(monthly[["WL-Geb.", "SP-Geb."]])
         st.caption("Umsatz je Monat")
         st.bar_chart(monthly[["Umsatz"]])
+
+# ── Export ────────────────────────────────────────────────────────────────────
+st.header("Export")
+
+# Metadata for PDF
+def _period_bounds(df_in: pd.DataFrame) -> tuple[str, str]:
+    if "_month" in df_in.columns:
+        months = sorted(df_in["_month"].dropna().unique().tolist())
+        if months:
+            return months[0], months[-1]
+    if "datum" in df_in.columns:
+        dates = pd.to_datetime(df_in["datum"], dayfirst=True, errors="coerce").dropna()
+        if not dates.empty:
+            return dates.min().strftime("%Y-%m"), dates.max().strftime("%Y-%m")
+    return "–", "–"
+
+def _partner_display(df_in: pd.DataFrame) -> str:
+    if "partner_name" in df_in.columns:
+        names = df_in["partner_name"].dropna().unique().tolist()
+        if names:
+            return names[0] if len(names) == 1 else ", ".join(names[:3])
+    if "partner_id" in df_in.columns:
+        pids = df_in["partner_id"].dropna().unique().tolist()
+        if pids:
+            return pids[0] if len(pids) == 1 else f"{pids[0]} (+{len(pids)-1})"
+    return "–"
+
+zero_effect_brands = sorted(
+    fdf.loc[~comp["offerable"], "brand"].dropna().unique().tolist()
+) if "brand" in fdf.columns else []
+
+pf, pt      = _period_bounds(fdf)
+pname       = _partner_display(fdf)
+fanout_ids  = (rpt.fanout_partner_ids if rpt else [])
+proj_ref    = None
+try:
+    if annual_vol > 0:
+        proj_ref = project_tier_b(fdf, params, offer, dcc_pct, annual_volume=annual_vol)
+except ValueError:
+    pass
+
+col_pdf, col_csv = st.columns(2)
+
+with col_pdf:
+    st.subheader("Kunden-PDF")
+    st.caption(
+        "Zusammenfassung in SwiPay-CI: Ersparnis, DCC-Vorteil, "
+        "Hochrechnung und Datenhinweise."
+    )
+    if st.button("PDF generieren", type="primary"):
+        try:
+            mix_h = proj_ref.mix_hints if proj_ref else []
+            pdf_bytes = build_pdf(
+                partner_name       = pname,
+                period_from        = pf,
+                period_to          = pt,
+                brutto             = brutto_sum,
+                n_txn              = n_txn,
+                n_terminals        = n_term,
+                avg_ticket         = avg_ticket,
+                wl_net             = t["wl_net"],
+                sp_net             = t["sp_net"],
+                wl_cashback        = t["wl_cashback"],
+                sp_cashback        = t["sp_cashback"],
+                saving             = diff,
+                dcc_advantage      = dcc_adv,
+                dcc_pct            = dcc_pct,
+                projection         = proj_ref,
+                annual_volume      = annual_vol,
+                fanout_partner_ids = fanout_ids,
+                zero_effect_brands = zero_effect_brands,
+                mix_hints          = mix_h,
+            )
+            fname = (
+                f"SwiPay_Analyse_{pname.replace(' ','_')}_{pf}_{pt}.pdf"
+                .replace(",", "").replace("/", "-")
+            )
+            st.download_button(
+                "PDF herunterladen",
+                data=pdf_bytes,
+                file_name=fname,
+                mime="application/pdf",
+            )
+        except Exception as exc:
+            st.error(f"PDF-Fehler: {exc}")
+
+with col_csv:
+    st.subheader("Interner Detail-Export")
+    st.caption(
+        "Alle Worldline-Felder plus Engine-KPIs (wl_net, sp_net, "
+        "wl_cashback, sp_cashback, floored, offerable), ungefiltert aus der Selektion."
+    )
+    csv_str = build_csv(fdf, comp)
+    st.download_button(
+        "CSV herunterladen",
+        data=csv_str.encode("utf-8-sig"),
+        file_name=f"SwiPay_Detail_{pf}_{pt}.csv",
+        mime="text/csv",
+    )

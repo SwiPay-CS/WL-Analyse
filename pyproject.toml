@@ -3,6 +3,7 @@ name = "swipay-wl-compare"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "fpdf2>=2.8.7",
     "pandas>=3.0",
     "pyxlsb>=1.0",
     "streamlit>=1.58.0",
