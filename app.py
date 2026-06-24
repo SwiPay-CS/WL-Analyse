@@ -37,9 +37,8 @@ DB_PATH = str(ROOT / "data" / "swipay.db")
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 _DEFAULT_CATS: dict[str, dict] = {
-    "Debit":      {"asf_pct": 0.11, "min_fee": 0.10},
-    "Credit":     {"asf_pct": 0.16, "min_fee": 0.12},
-    "Commercial": {"asf_pct": 0.20, "min_fee": 0.12},
+    "Debit":  {"asf_pct": 0.30, "min_fee": 0.15},
+    "Credit": {"asf_pct": 0.35, "min_fee": 0.20},
 }
 _DEFAULT_DCC_PCT = 1.40   # displayed as %, divided by 100 before engine
 
