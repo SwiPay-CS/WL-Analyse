@@ -35,7 +35,11 @@
       "Bash(find ~/Documents -name \"*swipay*\" -o -name \"*SwiPay*\" 2>/dev/null | grep -v \".git\" | head -20; find ~/Library -name \"*swipay*\" 2>/dev/null | head -5)",
       "Bash(grep -h \"color\\\\|font\\\\|#[0-9a-fA-F]\\\\{3,6\\\\}\\\\|rgb\\\\|SwiPay\\\\|--\" /Users/schellmo/Documents/Claude/Analysen/Merchants/SwiPay-eTrax-dashboard_ic++.html)",
       "mcp__plugin_product-management_atlassian__getAccessibleAtlassianResources",
-      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp log --oneline -5)"
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp log --oneline -5)",
+      "mcp__plugin_product-management_atlassian__getConfluencePageDescendants",
+      "mcp__plugin_product-management_atlassian__searchConfluenceUsingCql",
+      "mcp__plugin_product-management_atlassian__getConfluencePage",
+      "mcp__plugin_product-management_atlassian__updateConfluencePage"
     ]
   }
 }
