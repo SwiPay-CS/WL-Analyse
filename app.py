@@ -98,10 +98,11 @@ with st.sidebar:
     sheet_val = st.text_input("Sheet-Name (XLSB, leer = erstes Sheet)", value="WL")
 
     if uploaded and st.button("Laden & prüfen", type="primary"):
+        tmp_dir = tempfile.mkdtemp()
         tmp_paths: list[str] = []
         for f in uploaded:
-            fd, p = tempfile.mkstemp(suffix=Path(f.name).suffix)
-            with os.fdopen(fd, "wb") as fh:
+            p = str(Path(tmp_dir) / f.name)
+            with open(p, "wb") as fh:
                 fh.write(f.read())
             tmp_paths.append(p)
         try:
@@ -112,11 +113,11 @@ with st.sidebar:
         except Exception as exc:
             st.error(f"Fehler beim Laden: {exc}")
         finally:
-            for p in tmp_paths:
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
+            import shutil
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
     # ── Parameters ───────────────────────────────────────────────────────────
     st.subheader("Parameter")
