@@ -169,7 +169,12 @@ def ingest_files(
         _audit(con, cid, "INGEST_START", f"files={len(paths)}")
 
         # Pass 1: pre-checks and loading.
-        accepted: list[tuple[pd.DataFrame, str, str]] = []  # (df, fhash, fname)
+        # accepted = files that are new and will be registered in the DB.
+        # reload_only = files already known (hash-blocked) but still loaded for
+        #               in-session display; they are NOT re-registered to avoid
+        #               double-counting row_keys across runs.
+        accepted:     list[tuple[pd.DataFrame, str, str]] = []
+        reload_only:  list[tuple[pd.DataFrame, str, str]] = []
 
         for raw_path in paths:
             fname = Path(raw_path).name
@@ -189,6 +194,10 @@ def ingest_files(
                 report.files_blocked_hash.append(fname)
                 _audit(con, cid, "BLOCK_DUPLICATE_FILE",
                        f"file={fname} hash={fhash[:12]}")
+                # Still load into memory so the UI can display the data.
+                df = load_worldline(raw_path, sheet=sheet)
+                df = add_keys(df)
+                reload_only.append((df, fhash, fname))
                 continue
 
             df = load_worldline(raw_path, sheet=sheet)
@@ -196,45 +205,53 @@ def ingest_files(
             accepted.append((df, fhash, fname))
             _audit(con, cid, "FILE_LOADED", f"file={fname} rows={len(df)}")
 
-        if not accepted:
+        if not accepted and not reload_only:
             _audit(con, cid, "INGEST_END", "rows_new=0 reason=all_blocked")
             return pd.DataFrame(), report
 
-        # Merge and dedup within this batch (same row present in two files).
-        merged = pd.concat([df for df, _, _ in accepted], ignore_index=True)
-        before = len(merged)
-        merged = merged.drop_duplicates(subset=["idempotency_key"])
-        intra = before - len(merged)
-        if intra:
-            report.rows_skipped_overlap += intra
-            _audit(con, cid, "INTRA_BATCH_DEDUP", f"skipped={intra}")
+        if accepted:
+            # Merge and dedup within this batch (same row present in two files).
+            merged = pd.concat([df for df, _, _ in accepted], ignore_index=True)
+            before = len(merged)
+            merged = merged.drop_duplicates(subset=["idempotency_key"])
+            intra = before - len(merged)
+            if intra:
+                report.rows_skipped_overlap += intra
+                _audit(con, cid, "INTRA_BATCH_DEDUP", f"skipped={intra}")
 
-        # Level 3: drop rows already in the DB from a previous run.
-        all_keys = merged["idempotency_key"].tolist()
-        already = _known_keys(con, all_keys)
-        if already:
-            report.rows_skipped_overlap += len(already)
-            merged = merged[~merged["idempotency_key"].isin(already)]
-            _audit(con, cid, "OVERLAP_ROWS_DROPPED", f"count={len(already)}")
+            # Level 3: drop rows already in the DB from a previous run.
+            all_keys = merged["idempotency_key"].tolist()
+            already = _known_keys(con, all_keys)
+            if already:
+                report.rows_skipped_overlap += len(already)
+                merged = merged[~merged["idempotency_key"].isin(already)]
+                _audit(con, cid, "OVERLAP_ROWS_DROPPED", f"count={len(already)}")
 
-        report.rows_new = len(merged)
+            report.rows_new = len(merged)
 
-        # Persist: attribute each surviving row to the first file that owns it.
-        remaining: set[str] = set(merged["idempotency_key"].tolist())
-        for df_part, fhash, fname in accepted:
-            mine = list(remaining & set(df_part["idempotency_key"].tolist()))
-            remaining -= set(mine)
-            _persist_keys(con, mine, fhash, cid)
-            con.execute(
-                "INSERT OR IGNORE INTO processed_files "
-                "(file_name, file_hash, rows_added, correlation_id, processed_at) "
-                "VALUES (?,?,?,?,?)",
-                (fname, fhash, len(mine), cid, _utc()),
-            )
-            report.files_processed.append(fname)
+            # Persist: attribute each surviving row to the first file that owns it.
+            remaining: set[str] = set(merged["idempotency_key"].tolist())
+            for df_part, fhash, fname in accepted:
+                mine = list(remaining & set(df_part["idempotency_key"].tolist()))
+                remaining -= set(mine)
+                _persist_keys(con, mine, fhash, cid)
+                con.execute(
+                    "INSERT OR IGNORE INTO processed_files "
+                    "(file_name, file_hash, rows_added, correlation_id, processed_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (fname, fhash, len(mine), cid, _utc()),
+                )
+                report.files_processed.append(fname)
+        else:
+            # All files were hash-blocked; rows_new stays 0.
+            # Return the reload_only data (already in DB) for display.
+            merged = pd.concat([df for df, _, _ in reload_only], ignore_index=True)
+            merged = merged.drop_duplicates(subset=["idempotency_key"])
 
         # Fan-out detection on the full accepted dataset.
-        all_accepted = pd.concat([df for df, _, _ in accepted], ignore_index=True)
+        all_accepted = pd.concat(
+            [df for df, _, _ in (accepted + reload_only)], ignore_index=True
+        )
         report.fanout_partner_ids = _detect_fanout(all_accepted)
         if report.fanout_partner_ids:
             _audit(con, cid, "FANOUT_SUSPECTED",
