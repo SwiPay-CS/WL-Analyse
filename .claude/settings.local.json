@@ -41,7 +41,8 @@
       "mcp__plugin_product-management_atlassian__getConfluencePage",
       "mcp__plugin_product-management_atlassian__updateConfluencePage",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501)",
-      "Bash(sqlite3 data/swipay.db ' *)"
+      "Bash(sqlite3 data/swipay.db ' *)",
+      "Bash(pkill -f \"streamlit run\")"
     ]
   }
 }
