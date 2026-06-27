@@ -64,3 +64,13 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 ## Dokumentation
 - Auswertungsprofil: https://swipay.atlassian.net/wiki/x/AQA4E
 - Tool-Dokumentation: https://swipay.atlassian.net/wiki/x/I4BME
+
+## Versionierung
+Format:
+Major.Minor.Patch.Hotfix
+Beispiele:
+4.x.x        = Major Release
+4.1.x        = Minor Release
+4.1.1        = Patch / Bugfix Release
+4.1.1.1      = Hotfix
+4.1.1.2      = Weiterer Hotfix
