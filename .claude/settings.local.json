@@ -42,7 +42,11 @@
       "mcp__plugin_product-management_atlassian__updateConfluencePage",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501)",
       "Bash(sqlite3 data/swipay.db ' *)",
-      "Bash(pkill -f \"streamlit run\")"
+      "Bash(pkill -f \"streamlit run\")",
+      "Bash(pkill -f streamlit)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status --porcelain config/ .claude/)",
+      "Bash(git commit *)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp diff .claude/settings.local.json)"
     ]
   }
 }
