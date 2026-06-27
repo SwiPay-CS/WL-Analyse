@@ -55,7 +55,8 @@
       "Bash(xargs -I{} echo \"conflict markers: {}\")",
       "Bash(git --no-pager log -2 --format='%h %an <%ae>')",
       "Bash(git --no-pager log -1 --format='%h %an <%ae>')",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp --no-pager diff CLAUDE.md)"
     ]
   }
 }
