@@ -20,11 +20,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class BrandParams:
-    """SwiPay-Konditionen je Brand bzw. Kategorie.
+    """SwiPay-Konditionen je Brand (Brand-Typ-Modell).
 
     asf_pct  ASF-Anteil vom Bruttobetrag (0.0011 = 0.11%)
-    asf_fix  nominaler ASF-Zuschlag je Transaktion, CHF
-    min_fee  Mindestgebuehr auf ASF+ICF+CSF, CHF
+    asf_fix  Trx-Fee: fixer Zuschlag je Transaktion, CHF (Default 0.01 = 1 Rp.)
+    min_fee  Mindestgebuehr, greift gegen die GESAMTGEBUEHR
+             ASF + Trx-Fee + ICF + CSF, CHF (realisiert ueber die ASF)
     ic_cap   optionaler Interchange-Cap je TRX, CHF (None = kein Cap)
 
     DCC-Cashback ist ein globaler Satz, nicht je Kategorie — wird als

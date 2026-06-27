@@ -19,7 +19,8 @@ from projection import (
 DEBIT = BrandParams(asf_pct=0.001, asf_fix=0.0, min_fee=0.10)
 DCC_RATE = 0.014
 
-PARAMS = ParamTable({"Debit": DEBIT, "Credit": DEBIT})
+# Brand-keyed ParamTable (brand-type model).
+PARAMS = ParamTable({"VisaDebit": DEBIT, "Visa": DEBIT}, fallback_key="VisaDebit")
 OFFER  = Offer(frozenset({"VisaDebit", "Visa"}))  # TWINT excluded
 
 
@@ -142,7 +143,8 @@ def test_dcc_advantage_positive_at_185_percent():
         "is_dcc":         [True],
         "is_refund":      [False],
     })
-    params = ParamTable({"Credit": BrandParams(asf_pct=0.0016, min_fee=0.0)})
+    params = ParamTable({"Visa": BrandParams(asf_pct=0.0016, min_fee=0.0)},
+                        fallback_key="Visa")
     offer  = Offer(frozenset({"Visa"}))
 
     # annual_volume == observed purchase volume → scale = 1 → exact projection.

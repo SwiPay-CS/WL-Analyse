@@ -1,48 +1,86 @@
-"""Sanity-check: run the engine against real Worldline export data.
+"""Sanity-check: run the engine against the real Worldline export and verify
+every acceptance anchor (Davos dataset).
 
-Expected result: Worldline net == 103'810.65 CHF (113'497 rows).
 Place the export at data/Analyse_Davos-Klosters.xlsb before running.
+Prints a PASS/FAIL line per anchor. Lieber eine Luecke als eine Luege:
+anchors that do not reproduce are reported as FAIL, never quietly adjusted.
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import pandas as pd
-from engine import BrandParams, ParamTable, Offer
+
 from loader import load_worldline, add_keys
 from pipeline import run_comparison, totals
+from settings import load_brand_master, default_rate_profile, build_param_table
 
 XLSB = os.path.join(os.path.dirname(__file__), "data", "Analyse_Davos-Klosters.xlsb")
 
-# Illustrative parameters (NOT the real price list).
-PARAMS = ParamTable({
-    "Debit":      BrandParams(0.0011, 0.0, 0.10),
-    "Credit":     BrandParams(0.0016, 0.0, 0.12),
-    "Commercial": BrandParams(0.0020, 0.0, 0.12),
-})
-# Global DCC cashback rate applied to all offerable brands.
-DCC_CASHBACK_PCT = 0.014
 
-OFFER = Offer(frozenset({
-    "VisaDebit", "Debit Mastercard", "Mastercard", "Visa", "Maestro",
-    "Maestro-CH", "V PAY", "Diners/Discover", "Union Pay",
-}))
+def chf(v: float) -> str:
+    return f"{v:,.2f}".replace(",", "'")
 
+
+def check(label: str, got: float, want: float, tol: float = 0.01) -> bool:
+    ok = abs(got - want) < tol
+    flag = "PASS" if ok else "FAIL"
+    delta = "" if ok else f"   (Delta {got - want:+,.2f})".replace(",", "'")
+    print(f"  [{flag}] {label:36} {chf(got):>16}  Soll {chf(want):>16}{delta}")
+    return ok
+
+
+# --- load -------------------------------------------------------------------
 df = load_worldline(XLSB, sheet="WL")
-print(f"Loaded: {len(df)} transactions, columns normalised")
-
 df = add_keys(df)
-dups = df["idempotency_key"].duplicated().sum()
-print(f"Idempotency keys: {dups} duplicates across {len(df)} rows")
+print(f"Geladen: {len(df)} Zeilen\n")
 
-res = run_comparison(df, PARAMS, OFFER, dcc_cashback_pct=DCC_CASHBACK_PCT)
+# --- engine (brand-type model, placeholder rates) ---------------------------
+master = load_brand_master()
+profile = default_rate_profile()
+params, offer = build_param_table(master, profile, mode="schnell")
+res = run_comparison(df, params, offer, dcc_cashback_pct=profile.dcc_pct)
 t = totals(res)
-print(f"\nWorldline Netto: {t['wl_net']:>14,.2f} CHF")
-print(f"SwiPay    Netto: {t['sp_net']:>14,.2f} CHF")
-print(f"Ersparnis:       {t['saving']:>14,.2f} CHF")
-print(f"Floor greift bei {t['n_floored']} Transaktionen")
 
-assert abs(t["wl_net"] - 103810.65) < 0.01, \
-    f"Worldline net deviates: {t['wl_net']:.2f} != 103810.65"
-print("\nOK: Worldline-Netto deckt sich mit dem KPIs-Blatt.")
+# --- derived metrics --------------------------------------------------------
+brutto = pd.to_numeric(df["brutto"], errors="coerce")
+is_ref = df["is_refund"].to_numpy(bool)
+purch = ~is_ref
+brutto_purch = float(brutto[purch].sum())
+
+# Foreign-currency volume: all rows whose clearing region is not Domestic
+# (Liechtenstein neglected). Refunds included -> matches the acceptance anchor.
+region = df["region"].astype(str).str.strip().str.lower()
+fx_vol = float(brutto[(region != "domestic") & region.ne("nan")].sum())
+
+dcc_vol = float(brutto[df["is_dcc"].to_numpy(bool)].sum())
+
+# Commercial volume: all rows whose card category is "Commercial" (refunds
+# included), in line with the confirmed anchor 740'529.33.
+cat = df["category"].astype(str).str.strip()
+comm_vol = float(brutto[cat.eq("Commercial")].sum())
+
+results = []
+print("Worldline-Anker (gelockt):")
+results.append(check("Zeilen", float(len(df)), 113497.0, tol=0.5))
+results.append(check("WL-Brutto-Gebuehren", t["wl_fee"], 116513.10))
+results.append(check("WL-DCC-Cashback", t["wl_cashback"], 12702.45))
+results.append(check("WL-Netto-Gebuehren", t["wl_net"], 103810.65))
+
+print("\nNeue Anker (Datenqualitaet / Info-KPI):")
+results.append(check("Bruttoumsatz (Kaeufe)", brutto_purch, 14793293.29))
+results.append(check("DCC-faeh. Fremdwaehrungsvol.", fx_vol, 4336735.23))
+results.append(check("genutztes DCC-Volumen", dcc_vol, 905721.92))
+results.append(check("Bruttoumsatz Commercial", comm_vol, 740529.33))
+
+n_pass = sum(results)
+print(f"\n{n_pass}/{len(results)} Anker bestanden.")
+print(f"SwiPay-Netto (Platzhalter-Saetze): {chf(t['sp_net'])} CHF  "
+      f"Ersparnis {chf(t['saving'])} CHF")
+
+if n_pass < len(results):
+    print("\nACHTUNG: nicht alle Anker reproduzieren. Vor Kundeneinsatz klaeren.")
+    sys.exit(1)
+print("\nOK: alle Anker bestanden.")

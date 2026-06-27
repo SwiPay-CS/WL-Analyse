@@ -77,30 +77,36 @@ def _sample_df():
     })
 
 
+# Brand-keyed ParamTable (brand-type model): resolution is on the brand, not
+# on the card category.
+_BRAND_PARAMS = ParamTable({"VisaDebit": DEBIT, "Visa": DEBIT}, fallback_key="VisaDebit")
+
+
 def test_non_offerable_brand_delta_zero_in_pipeline():
     """TWINT nicht im Angebot -> SwiPay-Netto = Worldline-Netto (Delta 0)."""
     df = _sample_df()
-    params = ParamTable({"Debit": DEBIT, "Credit": DEBIT})
     offer = Offer(frozenset({"VisaDebit", "Visa"}))  # TWINT excluded
-    res = run_comparison(df, params, offer, dcc_cashback_pct=DCC_RATE)
+    res = run_comparison(df, _BRAND_PARAMS, offer, dcc_cashback_pct=DCC_RATE)
     twint = res[df["brand"] == "TWINT"].iloc[0]
     assert twint["sp_net"] == pytest.approx(twint["wl_net"])
     assert bool(twint["offerable"]) is False
 
 
 def test_vectorized_matches_scalar():
-    """run_comparison muss zeilenweise mit swipay_fee uebereinstimmen."""
+    """run_comparison muss zeilenweise mit swipay_fee uebereinstimmen.
+
+    Aufloesung der Parameter erfolgt PRO BRAND (Brand-Typ-Modell).
+    """
     df = _sample_df()
-    params = ParamTable({"Debit": DEBIT, "Credit": DEBIT})
     offer = Offer(frozenset({"VisaDebit", "Visa"}))
-    res = run_comparison(df, params, offer, dcc_cashback_pct=DCC_RATE)
+    res = run_comparison(df, _BRAND_PARAMS, offer, dcc_cashback_pct=DCC_RATE)
 
     for i, row in df.iterrows():
         scalar = swipay_fee(
             brutto=row["brutto"],
             scheme_fee=abs(row["scheme_fee"]),
             interchange=abs(row["interchange"]),
-            params=params.resolve(row["category"]),
+            params=_BRAND_PARAMS.resolve(row["brand"]),
             dcc_cashback_pct=DCC_RATE,
             is_dcc=bool(row["is_dcc"]),
             is_refund=bool(row["is_refund"]),

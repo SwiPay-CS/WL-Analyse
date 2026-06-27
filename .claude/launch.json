@@ -4,8 +4,17 @@
     {
       "name": "swipay-wl-serve",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "swipay-wl-serve"],
-      "port": 8080
+      "runtimeArgs": [
+        "run",
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.port",
+        "8501",
+        "--server.headless",
+        "true"
+      ],
+      "port": 8501
     }
   ]
 }

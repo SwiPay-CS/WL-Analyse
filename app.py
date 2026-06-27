@@ -1,11 +1,13 @@
 """
-SwiPay Worldline-Vergleichstool — Streamlit-Oberfläche (Phase 4).
+SwiPay Worldline-Vergleichstool — Streamlit-Oberfläche.
 Start: uv run streamlit run app.py
+
+Brand-Typ-Modell + Settings (Stammliste) + Schnell-/Expertenmodus +
+drei brutto-konsistente Übersichten + DCC-Potenzial.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -16,12 +18,23 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 import pandas as pd
 import streamlit as st
 
-from engine import BrandParams, ParamTable, Offer
 from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
 from projection import project_tier_b, CoverageLabel
 from db_groups import init_groups_db, get_groups, assign_group, unassign_group
 from reporter import build_pdf, build_csv
+from settings import (
+    OFFERABLE_TYPES,
+    BrandRecord,
+    BrandMaster,
+    RateProfile,
+    TypeRate,
+    build_param_table,
+    conservative_collapse,
+    default_rate_profile,
+    load_brand_master,
+    prefill_brand_overrides,
+)
 
 # ── Page setup ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -35,17 +48,8 @@ ROOT    = Path(__file__).parent
 DB_PATH = str(ROOT / "data" / "swipay.db")
 (ROOT / "data").mkdir(exist_ok=True)
 
-# ── Defaults ─────────────────────────────────────────────────────────────────
-_DEFAULT_CATS: dict[str, dict] = {
-    "Debit":  {"asf_pct": 0.30, "min_fee": 0.15},
-    "Credit": {"asf_pct": 0.35, "min_fee": 0.20},
-}
-_DEFAULT_DCC_PCT = 1.40   # displayed as %, divided by 100 before engine
-
-OFFERABLE = frozenset({
-    "VisaDebit", "Debit Mastercard", "Mastercard", "Visa", "Maestro",
-    "Maestro-CH", "V PAY", "Diners/Discover", "Union Pay",
-})
+# Human labels for the three offerable brand types.
+_TYPE_LABEL = {"debit": "Debit", "credit": "Credit", "credit2": "Credit 2"}
 
 # Transaction-size histogram (CHF) — 6 buckets
 HIST_BINS   = [0, 10, 50, 100, 200, 500, float("inf")]
@@ -81,6 +85,21 @@ init_groups_db(DB_PATH)
 for _k, _v in [("df", pd.DataFrame()), ("report", None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
+
+if "master" not in st.session_state:
+    st.session_state.master = load_brand_master()
+if "profile" not in st.session_state:
+    st.session_state.profile = default_rate_profile()
+    p0 = st.session_state.profile
+    # Seed the keyed quick-mode widgets once from the default profile.
+    for _t in OFFERABLE_TYPES:
+        st.session_state[f"asf_{_t}"] = round(p0.type_rates[_t].asf_pct * 100, 4)
+        st.session_state[f"trx_{_t}"] = round(p0.type_rates[_t].trx_fee * 100, 4)
+        st.session_state[f"mf_{_t}"]  = round(p0.type_rates[_t].min_fee, 2)
+    st.session_state["dcc_in"] = round(p0.dcc_pct * 100, 2)
+
+master: BrandMaster = st.session_state.master
+profile: RateProfile = st.session_state.profile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -119,37 +138,100 @@ with st.sidebar:
             except Exception:
                 pass
 
-    # ── Parameters ───────────────────────────────────────────────────────────
+    # ── Parameter / Modus ────────────────────────────────────────────────────
     st.subheader("Parameter")
+
+    new_mode = st.radio(
+        "Eingabemodus",
+        options=["schnell", "experte"],
+        format_func=lambda m: "Schnellmodus" if m == "schnell" else "Expertenmodus (pro Brand)",
+        horizontal=True,
+        index=0 if profile.mode == "schnell" else 1,
+    )
+
+    # Mode transition handling (Section 4).
+    if new_mode != profile.mode:
+        if new_mode == "experte":
+            # Quick -> expert: prefill every offerable brand from its type values.
+            profile.brand_overrides = prefill_brand_overrides(master, profile)
+            profile.mode = "experte"
+        else:
+            # Expert -> quick: conservative collapse (per type/variable max), keep overrides.
+            collapsed = conservative_collapse(master, profile)
+            st.session_state.profile = collapsed
+            profile = collapsed
+            for _t in OFFERABLE_TYPES:
+                st.session_state[f"asf_{_t}"] = round(profile.type_rates[_t].asf_pct * 100, 4)
+                st.session_state[f"trx_{_t}"] = round(profile.type_rates[_t].trx_fee * 100, 4)
+                st.session_state[f"mf_{_t}"]  = round(profile.type_rates[_t].min_fee, 2)
+            st.info("Expertenwerte konservativ zusammengefasst (höchster Wert je Typ "
+                    "und Variable). Brand-Werte bleiben erhalten.")
+        profile.mode = new_mode
 
     dcc_input = st.number_input(
         "SwiPay DCC-Satz (%)",
-        min_value=0.0, max_value=5.0,
-        value=_DEFAULT_DCC_PCT,
-        step=0.05, format="%.2f",
+        min_value=0.0, max_value=5.0, step=0.05, format="%.2f", key="dcc_in",
     )
-    dcc_pct = dcc_input / 100.0
+    profile.dcc_pct = dcc_input / 100.0
 
-    cat_params: dict[str, BrandParams] = {}
-    for cat, defs in _DEFAULT_CATS.items():
-        with st.expander(f"ASF {cat}", expanded=False):
-            ap = st.number_input(
-                f"ASF % ({cat})",
-                min_value=0.0, max_value=2.0,
-                value=defs["asf_pct"],
-                step=0.01, format="%.2f",
-                key=f"asf_{cat}",
-            ) / 100.0
-            mf = st.number_input(
-                f"Mindestgebühr ({cat}) CHF",
-                min_value=0.0, value=defs["min_fee"],
-                step=0.01, format="%.2f",
-                key=f"mf_{cat}",
+    if profile.mode == "schnell":
+        for t in OFFERABLE_TYPES:
+            with st.expander(f"ASF {_TYPE_LABEL[t]}", expanded=False):
+                ap = st.number_input(
+                    f"ASF % ({_TYPE_LABEL[t]})",
+                    min_value=0.0, max_value=2.0, step=0.01, format="%.3f",
+                    key=f"asf_{t}",
+                ) / 100.0
+                tr = st.number_input(
+                    f"Trx-Fee ({_TYPE_LABEL[t]}) Rappen",
+                    min_value=0.0, max_value=50.0, step=0.5, format="%.2f",
+                    key=f"trx_{t}",
+                ) / 100.0
+                mf = st.number_input(
+                    f"Mindestgebühr ({_TYPE_LABEL[t]}) CHF",
+                    min_value=0.0, step=0.01, format="%.2f",
+                    key=f"mf_{t}",
+                )
+                profile.type_rates[t] = TypeRate(asf_pct=ap, trx_fee=tr, min_fee=mf)
+    else:
+        st.caption("ASF/Trx-Fee/Mindestgebühr pro Brand. Vorbelegt aus den Typ-Werten.")
+        ov = profile.brand_overrides or prefill_brand_overrides(master, profile)
+        rows = []
+        for rec in master.offerable_brands():
+            tr = ov.get(rec.display_name) or profile.type_rates[rec.type]
+            rows.append({
+                "Brand":   rec.display_name,
+                "Typ":     _TYPE_LABEL.get(rec.type, rec.type),
+                "ASF %":   round(tr.asf_pct * 100, 4),
+                "Trx-Fee Rp.": round(tr.trx_fee * 100, 2),
+                "Min CHF": round(tr.min_fee, 2),
+            })
+        edited = st.data_editor(
+            pd.DataFrame(rows),
+            hide_index=True,
+            use_container_width=True,
+            disabled=["Brand", "Typ"],
+            key="expert_editor",
+        )
+        new_ov: dict[str, TypeRate] = {}
+        for _, r in edited.iterrows():
+            new_ov[str(r["Brand"])] = TypeRate(
+                asf_pct=float(r["ASF %"]) / 100.0,
+                trx_fee=float(r["Trx-Fee Rp."]) / 100.0,
+                min_fee=float(r["Min CHF"]),
             )
-            cat_params[cat] = BrandParams(asf_pct=ap, min_fee=mf)
+        profile.brand_overrides = new_ov
 
-    params = ParamTable(cat_params, fallback_key="Credit")
-    offer  = Offer(OFFERABLE)
+        with st.expander("Profil speichern"):
+            pname = st.text_input("Profilname", key="prof_save_name")
+            if st.button("Profil speichern") and pname.strip():
+                profile.save(pname.strip())
+                st.success(f"Profil «{pname.strip()}» gespeichert.")
+
+    st.session_state.profile = profile
+
+    # Build engine parameters from settings.
+    params, offer = build_param_table(master, profile, mode=profile.mode)
 
     # Early stop: no data yet
     df = st.session_state.df
@@ -179,7 +261,7 @@ with st.sidebar:
     sel_terminal = _ms("Terminal-ID",      "terminal_id",    "f_term")
     sel_brand    = _ms("Brand",            "brand",          "f_brand")
     sel_cat      = _ms("Karten-Kategorie", "category",       "f_cat")
-    sel_region   = _ms("IC++ Region",      "region",         "f_reg")
+    sel_region   = _ms("Clearing Region",  "region",         "f_reg")
 
     from_m = to_m = None
     if "_month" in df.columns:
@@ -230,13 +312,24 @@ if fdf.empty:
 # ─────────────────────────────────────────────────────────────────────────────
 # ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
-comp = run_comparison(fdf, params, offer, dcc_pct)
+comp = run_comparison(fdf, params, offer, profile.dcc_pct)
 t    = engine_totals(comp)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN CONTENT
 # ─────────────────────────────────────────────────────────────────────────────
 st.title("SwiPay Worldline-Vergleich")
+
+# ── Brand-Abgleich (Schutzregel 3: kein stilles Durchrechnen) ─────────────────
+data_brands = fdf["brand"].dropna().astype(str).unique().tolist() if "brand" in fdf.columns else []
+mapped, unmapped = master.reconcile(data_brands)
+if unmapped:
+    st.error(
+        "**Unbekannte Brands im Export** (nicht in der Stammliste): "
+        + ", ".join(f"«{b}»" for b in unmapped)
+        + ". Diese werden wie nicht-anbietbar behandelt (Worldline 1:1). "
+        "Bitte in den Stammdaten pflegen, bevor das Ergebnis verwendet wird."
+    )
 
 # ── Abgleichsbericht ─────────────────────────────────────────────────────────
 rpt = st.session_state.report
@@ -263,18 +356,91 @@ if rpt is not None:
                 "bitte vor Auswertung manuell prüfen."
             )
 
-# ── Kennzahlen ───────────────────────────────────────────────────────────────
-st.header("Kennzahlen")
+# ── Stammdaten (Brands) ───────────────────────────────────────────────────────
+with st.expander("Stammdaten — Brands (Settings)"):
+    st.caption(
+        "Logisches Brand = ein oder mehrere Such-Codes (Aliase). Typ steuert die "
+        "ASF-Behandlung. Spezial-Brands sind nie anbietbar (Worldline 1:1). "
+        "Wird als config/brands.json git-versioniert."
+    )
+    m_rows = []
+    for rec in master.sorted_brands():
+        m_rows.append({
+            "Anzeigename": rec.display_name,
+            "Typ":         rec.type,
+            "Anbietbar":   rec.offerable,
+            "Reihenfolge": rec.order,
+            "Such-Codes":  ", ".join(rec.search_codes),
+        })
+    m_edit = st.data_editor(
+        pd.DataFrame(m_rows),
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        column_config={
+            "Typ": st.column_config.SelectboxColumn(
+                options=["debit", "credit", "credit2", "spezial"]
+            ),
+            "Anbietbar": st.column_config.CheckboxColumn(),
+        },
+        key="master_editor",
+    )
+    if st.button("Stammliste speichern"):
+        try:
+            new_records = []
+            for _, r in m_edit.iterrows():
+                name = str(r["Anzeigename"]).strip()
+                if not name:
+                    continue
+                codes = [c.strip() for c in str(r["Such-Codes"]).split(",") if c.strip()]
+                new_records.append(BrandRecord(
+                    display_name=name,
+                    type=str(r["Typ"]).strip(),
+                    offerable=bool(r["Anbietbar"]),
+                    order=int(r["Reihenfolge"]),
+                    search_codes=codes or [name],
+                ))
+            new_master = BrandMaster(new_records)
+            new_master.save()
+            st.session_state.master = new_master
+            st.success("Stammliste gespeichert (config/brands.json).")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Konnte Stammliste nicht speichern: {exc}")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Derived metrics (filtered selection)
+# ─────────────────────────────────────────────────────────────────────────────
 is_purch   = ~fdf["is_refund"]
 purch_df   = fdf[is_purch]
-brutto_sum = float(purch_df["brutto"].sum()) if not purch_df.empty else 0.0
+brutto_b   = pd.to_numeric(fdf["brutto"], errors="coerce")
+brutto_sum = float(brutto_b[is_purch].sum())          # purchases only (Umsatz)
 n_txn      = len(fdf)
 n_purch    = int(is_purch.sum())
 n_term     = int(fdf["terminal_id"].nunique()) if "terminal_id" in fdf.columns else 0
 avg_ticket = brutto_sum / n_purch if n_purch else 0.0
 diff       = t["wl_net"] - t["sp_net"]
 dcc_adv    = t["sp_cashback"] - t["wl_cashback"]
+
+# DCC volume = all rows flagged DCC; foreign-currency volume = region != domestic.
+dcc_vol = float(brutto_b[fdf["is_dcc"].to_numpy(bool)].sum()) if "is_dcc" in fdf else 0.0
+if "region" in fdf.columns:
+    _reg = fdf["region"].astype(str).str.strip().str.lower()
+    fx_vol = float(brutto_b[(_reg != "domestic") & _reg.ne("nan")].sum())
+else:
+    fx_vol = 0.0
+
+# Commercial info-KPI: all rows with card category "Commercial" (refunds
+# included), matching the confirmed anchor.
+if "category" in fdf.columns:
+    _comm = fdf["category"].astype(str).str.strip().eq("Commercial")
+    comm_vol = float(brutto_b[_comm].sum())
+    comm_n   = int(_comm.sum())
+else:
+    comm_vol, comm_n = 0.0, 0
+
+# ── Kennzahlen ───────────────────────────────────────────────────────────────
+st.header("Kennzahlen")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Bruttoumsatz CHF",  chf(brutto_sum))
@@ -283,23 +449,65 @@ c3.metric("Käufe",             _int_fmt(n_purch))
 c4.metric("Terminals",         str(n_term))
 c5.metric("Ø Ticket CHF",      chf(avg_ticket))
 
-st.divider()
-
+# ── Drei Übersichten (brutto-konsistent) ──────────────────────────────────────
+st.subheader("1 · Gebühren (brutto)")
 c1, c2, c3 = st.columns(3)
-c1.metric("WL-Gebühren CHF",         chf(t["wl_net"]))
-c2.metric("SP-Gebühren CHF",         chf(t["sp_net"]))
-c3.metric("Differenz / Ersparnis CHF", chf(diff))
+c1.metric("WL-Gebühren CHF",  chf(t["wl_fee"]))
+c2.metric("SP-Gebühren CHF",  chf(t["sp_fee"]))
+c3.metric("Differenz CHF",    chf(t["wl_fee"] - t["sp_fee"]),
+          help="WL-Bruttogebühren minus SP-Bruttogebühren.")
 
+st.subheader("2 · DCC-Cashback")
 c1, c2, c3 = st.columns(3)
-c1.metric("WL DCC-Cashback CHF",  chf(t["wl_cashback"]))
-c2.metric("SP DCC-Cashback CHF",  chf(t["sp_cashback"]))
-c3.metric("DCC-Vorteil CHF",      chf(dcc_adv))
+c1.metric("WL DCC-Cashback CHF", chf(t["wl_cashback"]))
+c2.metric("SP DCC-Cashback CHF", chf(t["sp_cashback"]))
+c3.metric("DCC-Vorteil CHF",     chf(dcc_adv),
+          help="SP-Cashback minus WL-Cashback (positiv = SwiPay zahlt mehr zurück).")
+
+st.subheader("3 · Total (netto)")
+c1, c2, c3 = st.columns(3)
+c1.metric("WL netto CHF",            chf(t["wl_net"]))
+c2.metric("SP netto CHF",            chf(t["sp_net"]))
+c3.metric("Differenz / Ersparnis CHF", chf(diff),
+          help="(WL brutto − WL-Cashback) minus (SP brutto − SP-Cashback).")
+
+# ── Durchschnitte ─────────────────────────────────────────────────────────────
+st.subheader("Durchschnitts-Sätze")
+c1, c2, c3, c4 = st.columns(4)
+wl_avg = t["wl_fee"] / brutto_sum if brutto_sum else 0.0
+sp_avg = t["sp_fee"] / brutto_sum if brutto_sum else 0.0
+wl_dcc_avg = t["wl_cashback"] / dcc_vol if dcc_vol else 0.0
+sp_dcc_avg = t["sp_cashback"] / dcc_vol if dcc_vol else 0.0
+c1.metric("WL-Gebühren-Ø",  f"{wl_avg * 100:.3f} %", help="vom Bruttoumsatz (Käufe).")
+c2.metric("SP-Gebühren-Ø",  f"{sp_avg * 100:.3f} %", help="vom Bruttoumsatz (Käufe).")
+c3.metric("WL-DCC-Ø",       f"{wl_dcc_avg * 100:.3f} %", help="vom genutzten DCC-Volumen.")
+c4.metric("SP-DCC-Ø",       f"{sp_dcc_avg * 100:.3f} %", help="vom genutzten DCC-Volumen.")
+
+# ── DCC-Potenzial & Commercial (Info-KPI) ─────────────────────────────────────
+st.subheader("DCC-Potenzial & Karten-Mix (Info)")
+c1, c2, c3 = st.columns(3)
+c1.metric("Gesamtumsatz CHF",            chf(brutto_sum))
+c2.metric("Genutztes DCC-Volumen CHF",   chf(dcc_vol),
+          help="Bruttoumsatz der als DCC markierten Transaktionen.")
+c3.metric("DCC-fähiges Fremdwähr.-Vol. CHF", chf(fx_vol),
+          help="Bruttoumsatz aller Transaktionen mit Clearing Region ≠ Domestic.")
+
+dcc_use_pct = dcc_vol / fx_vol if fx_vol else 0.0
+comm_share_vol = comm_vol / brutto_sum if brutto_sum else 0.0
+comm_share_n   = comm_n / n_txn if n_txn else 0.0
+c1, c2, c3 = st.columns(3)
+c1.metric("DCC-Nutzung vom Fremdwähr.-Vol.", f"{dcc_use_pct * 100:.1f} %",
+          help="Genutztes DCC-Volumen / DCC-fähiges Fremdwährungsvolumen.")
+c2.metric("Commercial-Anteil (Umsatz)", f"{comm_share_vol * 100:.2f} %",
+          help=f"CHF {chf(comm_vol)} von CHF {chf(brutto_sum)} Gesamtumsatz.")
+c3.metric("Commercial-Anteil (Trx)", f"{comm_share_n * 100:.2f} %",
+          help=f"{_int_fmt(comm_n)} von {_int_fmt(n_txn)} Transaktionen.")
 
 # ── Hochrechnung ─────────────────────────────────────────────────────────────
 if annual_vol > 0:
     st.header("Hochrechnung (Stufe B)")
     try:
-        proj = project_tier_b(fdf, params, offer, dcc_pct, annual_volume=annual_vol)
+        proj = project_tier_b(fdf, params, offer, profile.dcc_pct, annual_volume=annual_vol)
         cov  = proj.coverage
 
         _ICONS = {
@@ -322,7 +530,6 @@ if annual_vol > 0:
         elif cov.label == CoverageLabel.LOW_COVERAGE:
             st.warning("Deckung 25–60 % — Punktschätzung mit Einschränkung.")
 
-        # Conservative end as headline for indicative tier
         headline = proj.band_low if cov.label == CoverageLabel.INDICATIVE else proj.saving_annual
 
         c1, c2, c3, c4 = st.columns(4)
@@ -502,7 +709,6 @@ with tab_monthly:
             monthly_show[["Umsatz CHF", "WL-Geb. CHF", "SP-Geb. CHF", "Txn"]],
             use_container_width=True,
         )
-        # Two separate charts: fees share the same scale, volume is much larger.
         st.caption("Gebühren je Monat")
         st.line_chart(monthly[["WL-Geb.", "SP-Geb."]])
         st.caption("Umsatz je Monat")
@@ -511,7 +717,6 @@ with tab_monthly:
 # ── Export ────────────────────────────────────────────────────────────────────
 st.header("Export")
 
-# Metadata for PDF
 def _period_bounds(df_in: pd.DataFrame) -> tuple[str, str]:
     if "_month" in df_in.columns:
         months = sorted(df_in["_month"].dropna().unique().tolist())
@@ -544,7 +749,7 @@ fanout_ids  = (rpt.fanout_partner_ids if rpt else [])
 proj_ref    = None
 try:
     if annual_vol > 0:
-        proj_ref = project_tier_b(fdf, params, offer, dcc_pct, annual_volume=annual_vol)
+        proj_ref = project_tier_b(fdf, params, offer, profile.dcc_pct, annual_volume=annual_vol)
 except ValueError:
     pass
 
@@ -573,7 +778,7 @@ with col_pdf:
                 sp_cashback        = t["sp_cashback"],
                 saving             = diff,
                 dcc_advantage      = dcc_adv,
-                dcc_pct            = dcc_pct,
+                dcc_pct            = profile.dcc_pct,
                 projection         = proj_ref,
                 annual_volume      = annual_vol,
                 fanout_partner_ids = fanout_ids,

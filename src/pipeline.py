@@ -23,6 +23,11 @@ def run_comparison(
     dcc_cashback_pct ist ein globaler Satz (z.B. 0.014 = 1.4%), gilt fuer
     alle Brands gleichermassen.
 
+    params wird PRO BRAND aufgeloest (Brand-Typ-Modell): die ParamTable ist auf
+    die rohen Brand-Codes gekeyt, nicht auf die Kartenkategorie. Commercial vs.
+    Consumer (Spalte category) hat KEINE Wirkung auf die ASF — ICF/CSF laufen
+    fuer beide identisch durch.
+
     Liefert je Zeile wl_fee, wl_cashback, wl_net, sp_fee, sp_cashback, sp_net,
     floored, offerable.
     """
@@ -31,16 +36,16 @@ def run_comparison(
     ic = df["interchange"].abs().fillna(0.0).to_numpy(float)
     pf = df["processing_fee"].abs().fillna(0.0).to_numpy(float)
     wl_dcc = df["dcc_payback"].fillna(0.0).to_numpy(float)
-    cat = df["category"].astype(str).to_numpy()
     brand = df["brand"].astype(str).to_numpy()
     is_dcc = df["is_dcc"].to_numpy(bool)
     is_refund = df["is_refund"].to_numpy(bool)
 
     offerable = np.array([offer.is_offerable(b) for b in brand], bool)
 
-    # Resolve params per row into arrays.
+    # Resolve params per row into arrays. Keyed on the raw brand code
+    # (brand-type model), NOT on the card category.
     def col(attr):
-        return np.array([getattr(params.resolve(c), attr) for c in cat], float)
+        return np.array([getattr(params.resolve(b), attr) for b in brand], float)
 
     asf_pct, asf_fix = col("asf_pct"), col("asf_fix")
     min_fee = col("min_fee")
