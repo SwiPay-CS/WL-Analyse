@@ -25,3 +25,6 @@ output/
 .DS_Store
 .idea/
 .vscode/
+
+# Local Claude Code permissions (machine-specific state, not project content)
+.claude/settings.local.json
