@@ -46,7 +46,15 @@
       "Bash(pkill -f streamlit)",
       "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp status --porcelain config/ .claude/)",
       "Bash(git commit *)",
-      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp diff .claude/settings.local.json)"
+      "Bash(git -C /Users/schellmo/Documents/Claude/Analysen/Prototyp diff .claude/settings.local.json)",
+      "Bash(git config *)",
+      "Bash(git rebase *)",
+      "Bash(git --no-pager diff .claude/settings.local.json)",
+      "Bash(git stash *)",
+      "Bash(git --no-pager log -2 --format='%h %an <%ae> | committer <%ce>')",
+      "Bash(xargs -I{} echo \"conflict markers: {}\")",
+      "Bash(git --no-pager log -2 --format='%h %an <%ae>')",
+      "Bash(git --no-pager log -1 --format='%h %an <%ae>')"
     ]
   }
 }
