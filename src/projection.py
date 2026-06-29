@@ -116,7 +116,9 @@ def project_tier_b(
 
     is_refund = df["is_refund"].to_numpy(bool)
     brutto    = df["brutto"].to_numpy(float)
-    obs_vol   = float(brutto[~is_refund].sum())
+    # nansum: real exports can carry an empty trailing row (brutto NaN) that
+    # must not poison the observed volume.
+    obs_vol   = float(np.nansum(brutto[~is_refund]))
 
     if obs_vol <= 0:
         raise ValueError("No purchase transactions in dataset.")
@@ -182,7 +184,7 @@ def project_tier_a(
     for brand in seen_brands:
         b      = brands == brand
         purch  = b & ~refund
-        obs_vol = float(brutto[purch].sum()) if purch.any() else 0.0
+        obs_vol = float(np.nansum(brutto[purch])) if purch.any() else 0.0
         ann_vol = annual_by_brand.get(brand, obs_vol)
 
         if brand not in annual_by_brand:
@@ -208,11 +210,11 @@ def project_tier_a(
     # Mix plausibility: compare share of brands that have annual data.
     total_ann_prov = sum(annual_by_brand.values()) or 1.0
     total_obs_prov = sum(
-        float(brutto[(brands == b) & ~refund].sum()) for b in annual_by_brand
+        float(np.nansum(brutto[(brands == b) & ~refund])) for b in annual_by_brand
     ) or 1.0
     for brand, ann_vol in annual_by_brand.items():
         ann_share = ann_vol / total_ann_prov
-        obs_vol_b = float(brutto[(brands == brand) & ~refund].sum())
+        obs_vol_b = float(np.nansum(brutto[(brands == brand) & ~refund]))
         obs_share = obs_vol_b / total_obs_prov
         if abs(ann_share - obs_share) > 0.05:
             mix_hints.append(

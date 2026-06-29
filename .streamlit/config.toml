@@ -1,0 +1,12 @@
+# SwiPay corporate-identity theme. Colours per brand guideline v2.1.
+# Fonts (Saira) are loaded via CSS @import in src/ui.py for reliability.
+[theme]
+base = "light"
+primaryColor = "#be5e48"            # SwiPay Rot
+backgroundColor = "#f4f2ef"         # warm off-white
+secondaryBackgroundColor = "#ffffff"
+textColor = "#3e4b4c"               # Anthrazit
+font = "sans serif"
+
+[server]
+headless = true

@@ -1,9 +1,9 @@
 """
-SwiPay Worldline-Vergleichstool — Streamlit-Oberfläche.
+SwiPay Worldline-Vergleichstool — Streamlit-Oberfläche im SwiPay-CI.
 Start: uv run streamlit run app.py
 
-Brand-Typ-Modell + Settings (Stammliste) + Schnell-/Expertenmodus +
-drei brutto-konsistente Übersichten + DCC-Potenzial.
+Navigierte App: Präsentation (Kundentermin), Transaktionen, Partner & Gruppen,
+Einstellungen (Upload · Mapping · ASF). Design-System in src/ui.py.
 """
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Make src/ importable regardless of working directory.
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 import pandas as pd
 import streamlit as st
 
+import ui
 from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
 from projection import project_tier_b, CoverageLabel
@@ -36,62 +36,32 @@ from settings import (
     prefill_brand_overrides,
 )
 
-# ── Page setup ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="SwiPay Worldline-Vergleich",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="SwiPay · Worldline-Vergleich", layout="wide",
+                   initial_sidebar_state="expanded")
+ui.inject_css()
 
-# ── Paths ────────────────────────────────────────────────────────────────────
 ROOT    = Path(__file__).parent
 DB_PATH = str(ROOT / "data" / "swipay.db")
 (ROOT / "data").mkdir(exist_ok=True)
 
-# Human labels for the three offerable brand types.
 _TYPE_LABEL = {"debit": "Debit", "credit": "Credit", "credit2": "Credit 2"}
-
-# Transaction-size histogram (CHF) — 6 buckets
 HIST_BINS   = [0, 10, 50, 100, 200, 500, float("inf")]
 HIST_LABELS = ["0–10", "10–50", "50–100", "100–200", "200–500", "500+"]
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+chf, num, pct, chf_c = ui.chf, ui.num, ui.pct, ui.chf_compact
 
-def chf(v: float, dec: int = 2) -> str:
-    """Swiss number format: apostrophe thousands, dot decimal. e.g. 1'234.56"""
-    return f"{v:,.{dec}f}".replace(",", "'")
-
-
-def _int_fmt(n: int) -> str:
-    return f"{n:,}".replace(",", "'")
-
-
-def _fmt_df(df_in: pd.DataFrame, money: list[str], counts: list[str] = []) -> pd.DataFrame:
-    """Pre-format numeric columns as strings for Swiss-format display."""
-    out = df_in.copy()
-    for c in money:
-        if c in out.columns:
-            out[c] = out[c].apply(lambda x: chf(float(x)) if pd.notna(x) else "")
-    for c in counts:
-        if c in out.columns:
-            out[c] = out[c].apply(lambda x: _int_fmt(int(x)) if pd.notna(x) else "")
-    return out
-
-# ── DB init ───────────────────────────────────────────────────────────────────
 init_db(DB_PATH)
 init_groups_db(DB_PATH)
 
 # ── Session state ─────────────────────────────────────────────────────────────
-for _k, _v in [("df", pd.DataFrame()), ("report", None)]:
+for _k, _v in [("df", pd.DataFrame()), ("report", None), ("nav", "Präsentation")]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
-
 if "master" not in st.session_state:
     st.session_state.master = load_brand_master()
 if "profile" not in st.session_state:
     st.session_state.profile = default_rate_profile()
     p0 = st.session_state.profile
-    # Seed the keyed quick-mode widgets once from the default profile.
     for _t in OFFERABLE_TYPES:
         st.session_state[f"asf_{_t}"] = round(p0.type_rates[_t].asf_pct * 100, 4)
         st.session_state[f"trx_{_t}"] = round(p0.type_rates[_t].trx_fee * 100, 4)
@@ -101,713 +71,647 @@ if "profile" not in st.session_state:
 master: BrandMaster = st.session_state.master
 profile: RateProfile = st.session_state.profile
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.title("SwiPay Vergleich")
 
-    # ── Upload ───────────────────────────────────────────────────────────────
-    st.subheader("Daten laden")
-    uploaded = st.file_uploader(
-        "Worldline-Exporte (XLSB / CSV)",
-        type=["xlsb", "csv"],
-        accept_multiple_files=True,
-    )
-    sheet_val = st.text_input("Sheet-Name (XLSB, leer = erstes Sheet)", value="WL")
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-    if uploaded and st.button("Laden & prüfen", type="primary"):
-        tmp_dir = tempfile.mkdtemp()
-        tmp_paths: list[str] = []
-        for f in uploaded:
-            p = str(Path(tmp_dir) / f.name)
-            with open(p, "wb") as fh:
-                fh.write(f.read())
-            tmp_paths.append(p)
-        try:
-            sheet = sheet_val.strip() or None
-            df_new, rpt = ingest_files(tmp_paths, DB_PATH, sheet=sheet)
-            st.session_state.df     = df_new
-            st.session_state.report = rpt
-        except Exception as exc:
-            st.error(f"Fehler beim Laden: {exc}")
-        finally:
-            import shutil
-            try:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            except Exception:
-                pass
+def _to_datetime(s: pd.Series) -> pd.Series:
+    """Parse the WL date column. XLSB delivers Excel serial numbers (days since
+    1899-12-30); CSV exports deliver date strings. Handle both."""
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_datetime(s, unit="D", origin="1899-12-30", errors="coerce")
+    return pd.to_datetime(s, dayfirst=True, errors="coerce")
 
-    # ── Parameter / Modus ────────────────────────────────────────────────────
-    st.subheader("Parameter")
 
-    new_mode = st.radio(
-        "Eingabemodus",
-        options=["schnell", "experte"],
-        format_func=lambda m: "Schnellmodus" if m == "schnell" else "Expertenmodus (pro Brand)",
-        horizontal=True,
-        index=0 if profile.mode == "schnell" else 1,
-    )
-
-    # Mode transition handling (Section 4).
-    if new_mode != profile.mode:
-        if new_mode == "experte":
-            # Quick -> expert: prefill every offerable brand from its type values.
-            profile.brand_overrides = prefill_brand_overrides(master, profile)
-            profile.mode = "experte"
-        else:
-            # Expert -> quick: conservative collapse (per type/variable max), keep overrides.
-            collapsed = conservative_collapse(master, profile)
-            st.session_state.profile = collapsed
-            profile = collapsed
-            for _t in OFFERABLE_TYPES:
-                st.session_state[f"asf_{_t}"] = round(profile.type_rates[_t].asf_pct * 100, 4)
-                st.session_state[f"trx_{_t}"] = round(profile.type_rates[_t].trx_fee * 100, 4)
-                st.session_state[f"mf_{_t}"]  = round(profile.type_rates[_t].min_fee, 2)
-            st.info("Expertenwerte konservativ zusammengefasst (höchster Wert je Typ "
-                    "und Variable). Brand-Werte bleiben erhalten.")
-        profile.mode = new_mode
-
-    dcc_input = st.number_input(
-        "SwiPay DCC-Satz (%)",
-        min_value=0.0, max_value=5.0, step=0.05, format="%.2f", key="dcc_in",
-    )
-    profile.dcc_pct = dcc_input / 100.0
-
-    if profile.mode == "schnell":
-        for t in OFFERABLE_TYPES:
-            with st.expander(f"ASF {_TYPE_LABEL[t]}", expanded=False):
-                ap = st.number_input(
-                    f"ASF % ({_TYPE_LABEL[t]})",
-                    min_value=0.0, max_value=2.0, step=0.01, format="%.3f",
-                    key=f"asf_{t}",
-                ) / 100.0
-                tr = st.number_input(
-                    f"Trx-Fee ({_TYPE_LABEL[t]}) Rappen",
-                    min_value=0.0, max_value=50.0, step=0.5, format="%.2f",
-                    key=f"trx_{t}",
-                ) / 100.0
-                mf = st.number_input(
-                    f"Mindestgebühr ({_TYPE_LABEL[t]}) CHF",
-                    min_value=0.0, step=0.01, format="%.2f",
-                    key=f"mf_{t}",
-                )
-                profile.type_rates[t] = TypeRate(asf_pct=ap, trx_fee=tr, min_fee=mf)
-    else:
-        st.caption("ASF/Trx-Fee/Mindestgebühr pro Brand. Vorbelegt aus den Typ-Werten.")
-        ov = profile.brand_overrides or prefill_brand_overrides(master, profile)
-        rows = []
-        for rec in master.offerable_brands():
-            tr = ov.get(rec.display_name) or profile.type_rates[rec.type]
-            rows.append({
-                "Brand":   rec.display_name,
-                "Typ":     _TYPE_LABEL.get(rec.type, rec.type),
-                "ASF %":   round(tr.asf_pct * 100, 4),
-                "Trx-Fee Rp.": round(tr.trx_fee * 100, 2),
-                "Min CHF": round(tr.min_fee, 2),
-            })
-        edited = st.data_editor(
-            pd.DataFrame(rows),
-            hide_index=True,
-            use_container_width=True,
-            disabled=["Brand", "Typ"],
-            key="expert_editor",
-        )
-        new_ov: dict[str, TypeRate] = {}
-        for _, r in edited.iterrows():
-            new_ov[str(r["Brand"])] = TypeRate(
-                asf_pct=float(r["ASF %"]) / 100.0,
-                trx_fee=float(r["Trx-Fee Rp."]) / 100.0,
-                min_fee=float(r["Min CHF"]),
-            )
-        profile.brand_overrides = new_ov
-
-        with st.expander("Profil speichern"):
-            pname = st.text_input("Profilname", key="prof_save_name")
-            if st.button("Profil speichern") and pname.strip():
-                profile.save(pname.strip())
-                st.success(f"Profil «{pname.strip()}» gespeichert.")
-
-    st.session_state.profile = profile
-
-    # Build engine parameters from settings.
-    params, offer = build_param_table(master, profile, mode=profile.mode)
-
-    # Early stop: no data yet
-    df = st.session_state.df
-    if df.empty:
-        st.info("Noch keine Daten geladen.")
-        st.stop()
-
-    # Compute _month helper column once (persisted in session state)
+def _ensure_month(df: pd.DataFrame) -> pd.DataFrame:
     if "datum" in df.columns and "_month" not in df.columns:
-        st.session_state.df["_month"] = (
-            pd.to_datetime(df["datum"], dayfirst=True, errors="coerce")
-            .dt.strftime("%Y-%m")
-        )
-        df = st.session_state.df
-
-    # ── Filters ──────────────────────────────────────────────────────────────
-    st.subheader("Filter")
-
-    def _ms(label: str, col: str, key: str) -> list | None:
-        if col not in df.columns:
-            return None
-        opts = sorted(df[col].dropna().astype(str).unique().tolist())
-        return st.multiselect(label, opts, default=opts, key=key)
-
-    sel_partner  = _ms("Partner-ID",       "partner_id",     "f_pid")
-    sel_vertr    = _ms("Vertragsnummer",   "vertragsnummer", "f_vertr")
-    sel_terminal = _ms("Terminal-ID",      "terminal_id",    "f_term")
-    sel_brand    = _ms("Brand",            "brand",          "f_brand")
-    sel_cat      = _ms("Karten-Kategorie", "category",       "f_cat")
-    sel_region   = _ms("Clearing Region",  "region",         "f_reg")
-
-    from_m = to_m = None
-    if "_month" in df.columns:
-        months = sorted(df["_month"].dropna().unique().tolist())
-        if len(months) >= 2:
-            from_m, to_m = st.select_slider(
-                "Zeitraum (von/bis Monat)",
-                options=months,
-                value=(months[0], months[-1]),
-            )
-        elif months:
-            from_m = to_m = months[0]
-
-    # ── Hochrechnung ─────────────────────────────────────────────────────────
-    st.subheader("Hochrechnung (Stufe B)")
-    annual_vol = st.number_input(
-        "Jahresumsatz CHF  (0 = kein Hochrechnen)",
-        min_value=0.0, value=0.0, step=1000.0, format="%.0f",
-        help="Beobachteter Umsatz wird auf diesen Wert hochskaliert.",
-    )
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FILTER APPLICATION
-# ─────────────────────────────────────────────────────────────────────────────
-df = st.session_state.df
-mask = pd.Series(True, index=df.index)
-
-for col, sel in [
-    ("partner_id",     sel_partner),
-    ("vertragsnummer", sel_vertr),
-    ("terminal_id",    sel_terminal),
-    ("brand",          sel_brand),
-    ("category",       sel_cat),
-    ("region",         sel_region),
-]:
-    if sel is not None and col in df.columns:
-        mask &= df[col].astype(str).isin(sel)
-
-if from_m and to_m and "_month" in df.columns:
-    mask &= df["_month"].between(from_m, to_m, inclusive="both")
-
-fdf = df[mask].reset_index(drop=True)
-
-if fdf.empty:
-    st.warning("Keine Transaktionen für die aktuelle Selektion.")
-    st.stop()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ENGINE
-# ─────────────────────────────────────────────────────────────────────────────
-comp = run_comparison(fdf, params, offer, profile.dcc_pct)
-t    = engine_totals(comp)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN CONTENT
-# ─────────────────────────────────────────────────────────────────────────────
-st.title("SwiPay Worldline-Vergleich")
-
-# ── Brand-Abgleich (Schutzregel 3: kein stilles Durchrechnen) ─────────────────
-data_brands = fdf["brand"].dropna().astype(str).unique().tolist() if "brand" in fdf.columns else []
-mapped, unmapped = master.reconcile(data_brands)
-if unmapped:
-    st.error(
-        "**Unbekannte Brands im Export** (nicht in der Stammliste): "
-        + ", ".join(f"«{b}»" for b in unmapped)
-        + ". Diese werden wie nicht-anbietbar behandelt (Worldline 1:1). "
-        "Bitte in den Stammdaten pflegen, bevor das Ergebnis verwendet wird."
-    )
-
-# ── Abgleichsbericht ─────────────────────────────────────────────────────────
-rpt = st.session_state.report
-if rpt is not None:
-    has_issues = bool(rpt.files_blocked_hash or rpt.fanout_partner_ids)
-    with st.expander("Abgleichsbericht", expanded=has_issues):
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Neue Zeilen",            _int_fmt(rpt.rows_new))
-        c2.metric("Übersprungen (Overlap)", _int_fmt(rpt.rows_skipped_overlap))
-        c3.metric("Blockierte Dateien",     len(rpt.files_blocked_hash))
-        if rpt.files_warned_name:
-            st.warning(
-                f"Dateiname bereits bekannt: {', '.join(rpt.files_warned_name)}"
-            )
-        if rpt.files_blocked_hash:
-            st.error(
-                f"Bit-identisch blockiert (nicht importiert): "
-                f"{', '.join(rpt.files_blocked_hash)}"
-            )
-        if rpt.fanout_partner_ids:
-            st.warning(
-                f"Fan-out-Verdacht bei Partner-ID(s) "
-                f"{', '.join(rpt.fanout_partner_ids)} — "
-                "bitte vor Auswertung manuell prüfen."
-            )
-
-# ── Stammdaten (Brands) ───────────────────────────────────────────────────────
-with st.expander("Stammdaten — Brands (Settings)"):
-    st.caption(
-        "Logisches Brand = ein oder mehrere Such-Codes (Aliase). Typ steuert die "
-        "ASF-Behandlung. Spezial-Brands sind nie anbietbar (Worldline 1:1). "
-        "Wird als config/brands.json git-versioniert."
-    )
-    m_rows = []
-    for rec in master.sorted_brands():
-        m_rows.append({
-            "Anzeigename": rec.display_name,
-            "Typ":         rec.type,
-            "Anbietbar":   rec.offerable,
-            "Reihenfolge": rec.order,
-            "Such-Codes":  ", ".join(rec.search_codes),
-        })
-    m_edit = st.data_editor(
-        pd.DataFrame(m_rows),
-        hide_index=True,
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config={
-            "Typ": st.column_config.SelectboxColumn(
-                options=["debit", "credit", "credit2", "spezial"]
-            ),
-            "Anbietbar": st.column_config.CheckboxColumn(),
-        },
-        key="master_editor",
-    )
-    if st.button("Stammliste speichern"):
-        try:
-            new_records = []
-            for _, r in m_edit.iterrows():
-                name = str(r["Anzeigename"]).strip()
-                if not name:
-                    continue
-                codes = [c.strip() for c in str(r["Such-Codes"]).split(",") if c.strip()]
-                new_records.append(BrandRecord(
-                    display_name=name,
-                    type=str(r["Typ"]).strip(),
-                    offerable=bool(r["Anbietbar"]),
-                    order=int(r["Reihenfolge"]),
-                    search_codes=codes or [name],
-                ))
-            new_master = BrandMaster(new_records)
-            new_master.save()
-            st.session_state.master = new_master
-            st.success("Stammliste gespeichert (config/brands.json).")
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Konnte Stammliste nicht speichern: {exc}")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Derived metrics (filtered selection)
-# ─────────────────────────────────────────────────────────────────────────────
-is_purch   = ~fdf["is_refund"]
-purch_df   = fdf[is_purch]
-brutto_b   = pd.to_numeric(fdf["brutto"], errors="coerce")
-brutto_sum = float(brutto_b[is_purch].sum())          # purchases only (Umsatz)
-n_txn      = len(fdf)
-n_purch    = int(is_purch.sum())
-n_term     = int(fdf["terminal_id"].nunique()) if "terminal_id" in fdf.columns else 0
-avg_ticket = brutto_sum / n_purch if n_purch else 0.0
-diff       = t["wl_net"] - t["sp_net"]
-dcc_adv    = t["sp_cashback"] - t["wl_cashback"]
-
-# DCC volume = all rows flagged DCC; foreign-currency volume = region != domestic.
-dcc_vol = float(brutto_b[fdf["is_dcc"].to_numpy(bool)].sum()) if "is_dcc" in fdf else 0.0
-if "region" in fdf.columns:
-    _reg = fdf["region"].astype(str).str.strip().str.lower()
-    fx_vol = float(brutto_b[(_reg != "domestic") & _reg.ne("nan")].sum())
-else:
-    fx_vol = 0.0
-
-# Commercial info-KPI: all rows with card category "Commercial" (refunds
-# included), matching the confirmed anchor.
-if "category" in fdf.columns:
-    _comm = fdf["category"].astype(str).str.strip().eq("Commercial")
-    comm_vol = float(brutto_b[_comm].sum())
-    comm_n   = int(_comm.sum())
-else:
-    comm_vol, comm_n = 0.0, 0
-
-# ── Kennzahlen ───────────────────────────────────────────────────────────────
-st.header("Kennzahlen")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Bruttoumsatz CHF",  chf(brutto_sum))
-c2.metric("Transaktionen",     _int_fmt(n_txn))
-c3.metric("Käufe",             _int_fmt(n_purch))
-c4.metric("Terminals",         str(n_term))
-c5.metric("Ø Ticket CHF",      chf(avg_ticket))
-
-# ── Drei Übersichten (brutto-konsistent) ──────────────────────────────────────
-st.subheader("1 · Gebühren (brutto)")
-c1, c2, c3 = st.columns(3)
-c1.metric("WL-Gebühren CHF",  chf(t["wl_fee"]))
-c2.metric("SP-Gebühren CHF",  chf(t["sp_fee"]))
-c3.metric("Differenz CHF",    chf(t["wl_fee"] - t["sp_fee"]),
-          help="WL-Bruttogebühren minus SP-Bruttogebühren.")
-
-st.subheader("2 · DCC-Cashback")
-c1, c2, c3 = st.columns(3)
-c1.metric("WL DCC-Cashback CHF", chf(t["wl_cashback"]))
-c2.metric("SP DCC-Cashback CHF", chf(t["sp_cashback"]))
-c3.metric("DCC-Vorteil CHF",     chf(dcc_adv),
-          help="SP-Cashback minus WL-Cashback (positiv = SwiPay zahlt mehr zurück).")
-
-st.subheader("3 · Total (netto)")
-c1, c2, c3 = st.columns(3)
-c1.metric("WL netto CHF",            chf(t["wl_net"]))
-c2.metric("SP netto CHF",            chf(t["sp_net"]))
-c3.metric("Differenz / Ersparnis CHF", chf(diff),
-          help="(WL brutto − WL-Cashback) minus (SP brutto − SP-Cashback).")
-
-# ── Durchschnitte ─────────────────────────────────────────────────────────────
-st.subheader("Durchschnitts-Sätze")
-c1, c2, c3, c4 = st.columns(4)
-wl_avg = t["wl_fee"] / brutto_sum if brutto_sum else 0.0
-sp_avg = t["sp_fee"] / brutto_sum if brutto_sum else 0.0
-wl_dcc_avg = t["wl_cashback"] / dcc_vol if dcc_vol else 0.0
-sp_dcc_avg = t["sp_cashback"] / dcc_vol if dcc_vol else 0.0
-c1.metric("WL-Gebühren-Ø",  f"{wl_avg * 100:.3f} %", help="vom Bruttoumsatz (Käufe).")
-c2.metric("SP-Gebühren-Ø",  f"{sp_avg * 100:.3f} %", help="vom Bruttoumsatz (Käufe).")
-c3.metric("WL-DCC-Ø",       f"{wl_dcc_avg * 100:.3f} %", help="vom genutzten DCC-Volumen.")
-c4.metric("SP-DCC-Ø",       f"{sp_dcc_avg * 100:.3f} %", help="vom genutzten DCC-Volumen.")
-
-# ── DCC-Potenzial & Commercial (Info-KPI) ─────────────────────────────────────
-st.subheader("DCC-Potenzial & Karten-Mix (Info)")
-c1, c2, c3 = st.columns(3)
-c1.metric("Gesamtumsatz CHF",            chf(brutto_sum))
-c2.metric("Genutztes DCC-Volumen CHF",   chf(dcc_vol),
-          help="Bruttoumsatz der als DCC markierten Transaktionen.")
-c3.metric("DCC-fähiges Fremdwähr.-Vol. CHF", chf(fx_vol),
-          help="Bruttoumsatz aller Transaktionen mit Clearing Region ≠ Domestic.")
-
-dcc_use_pct = dcc_vol / fx_vol if fx_vol else 0.0
-comm_share_vol = comm_vol / brutto_sum if brutto_sum else 0.0
-comm_share_n   = comm_n / n_txn if n_txn else 0.0
-c1, c2, c3 = st.columns(3)
-c1.metric("DCC-Nutzung vom Fremdwähr.-Vol.", f"{dcc_use_pct * 100:.1f} %",
-          help="Genutztes DCC-Volumen / DCC-fähiges Fremdwährungsvolumen.")
-c2.metric("Commercial-Anteil (Umsatz)", f"{comm_share_vol * 100:.2f} %",
-          help=f"CHF {chf(comm_vol)} von CHF {chf(brutto_sum)} Gesamtumsatz.")
-c3.metric("Commercial-Anteil (Trx)", f"{comm_share_n * 100:.2f} %",
-          help=f"{_int_fmt(comm_n)} von {_int_fmt(n_txn)} Transaktionen.")
-
-# ── Hochrechnung ─────────────────────────────────────────────────────────────
-if annual_vol > 0:
-    st.header("Hochrechnung (Stufe B)")
-    try:
-        proj = project_tier_b(fdf, params, offer, profile.dcc_pct, annual_volume=annual_vol)
-        cov  = proj.coverage
-
-        _ICONS = {
-            CoverageLabel.SIMULATABLE:  "🟢",
-            CoverageLabel.LOW_COVERAGE: "🟡",
-            CoverageLabel.INDICATIVE:   "🔴",
-        }
-        icon = _ICONS.get(cov.label, "⚪")
-        st.caption(
-            f"{icon} Deckungsgrad: **{cov.coverage_pct:.0%}**  ·  "
-            f"Stufe: **{cov.label.value}**"
-        )
-
-        if cov.label == CoverageLabel.INDICATIVE:
-            st.info(
-                "Deckung < 25 % — Ergebnis ist **indikativ**. "
-                "Headline zeigt das konservative Ende (–15 %). "
-                "Mehr Datenmonate für belastbare Aussage empfohlen."
-            )
-        elif cov.label == CoverageLabel.LOW_COVERAGE:
-            st.warning("Deckung 25–60 % — Punktschätzung mit Einschränkung.")
-
-        headline = proj.band_low if cov.label == CoverageLabel.INDICATIVE else proj.saving_annual
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Headline CHF",        chf(headline))
-        c2.metric("Band tief (–15 %)",   chf(proj.band_low))
-        c3.metric("Punktschätzung",      chf(proj.saving_annual))
-        c4.metric("Band hoch (+15 %)",   chf(proj.band_high))
-
-        c1, c2 = st.columns(2)
-        c1.metric("DCC-Vorteil p.a. CHF",  chf(proj.dcc_advantage_annual))
-        c2.metric("Beobachtet / Jahresziel",
-                  f"{chf(proj.observed_volume)} / {chf(annual_vol)} CHF")
-    except ValueError as exc:
-        st.error(str(exc))
-
-# ── Partner-Ansicht ───────────────────────────────────────────────────────────
-st.header("Partner-Ansicht")
-
-# Attach engine columns to the filtered frame (positional, both are reset_index)
-m = fdf.copy()
-m["wl_net"] = comp["wl_net"].values
-m["sp_net"] = comp["sp_net"].values
-m["wl_cb"]  = comp["wl_cashback"].values
-m["sp_cb"]  = comp["sp_cashback"].values
-
-_MONEY = ["Umsatz", "Ø Ticket", "WL-Geb.", "SP-Geb.", "Diff.", "WL-DCC", "SP-DCC", "DCC-Vtl."]
-_CNTS  = ["Txn"]
+        df["_month"] = _to_datetime(df["datum"]).dt.strftime("%Y-%m")
+    return df
 
 
-def _agg(sub: pd.DataFrame) -> dict:
-    pu = sub[~sub["is_refund"]]
-    n_pu = len(pu)
+def _months(df: pd.DataFrame) -> list[str]:
+    return sorted(df["_month"].dropna().unique().tolist()) if "_month" in df else []
+
+
+def _derive(fdf: pd.DataFrame, comp: pd.DataFrame, t: dict) -> dict:
+    b = pd.to_numeric(fdf["brutto"], errors="coerce")
+    is_p = ~fdf["is_refund"]
+    brutto = float(b[is_p].sum())
+    n_p = int(is_p.sum())
+    dcc_vol = float(b[fdf["is_dcc"].to_numpy(bool)].sum()) if "is_dcc" in fdf else 0.0
+    if "region" in fdf.columns:
+        r = fdf["region"].astype(str).str.strip().str.lower()
+        fx_vol = float(b[(r != "domestic") & r.ne("nan")].sum())
+    else:
+        fx_vol = 0.0
     return {
-        "Name":     str(sub["partner_name"].iloc[0])
-                    if "partner_name" in sub.columns and n_pu > 0 else "",
-        "Umsatz":   round(float(pu["brutto"].sum()), 2),
-        "Txn":      len(sub),
-        "Ø Ticket": round(float(pu["brutto"].mean()), 2) if n_pu else 0.0,
-        "WL-Geb.":  round(float(sub["wl_net"].sum()), 2),
-        "SP-Geb.":  round(float(sub["sp_net"].sum()), 2),
-        "Diff.":    round(float(sub["wl_net"].sum() - sub["sp_net"].sum()), 2),
-        "WL-DCC":   round(float(sub["wl_cb"].sum()), 2),
-        "SP-DCC":   round(float(sub["sp_cb"].sum()), 2),
-        "DCC-Vtl.": round(float(sub["sp_cb"].sum() - sub["wl_cb"].sum()), 2),
+        "brutto": brutto, "n_txn": len(fdf), "n_purch": n_p,
+        "n_term": int(fdf["terminal_id"].nunique()) if "terminal_id" in fdf else 0,
+        "avg_ticket": brutto / n_p if n_p else 0.0,
+        "diff": t["wl_net"] - t["sp_net"],
+        "dcc_adv": t["sp_cashback"] - t["wl_cashback"],
+        "dcc_vol": dcc_vol, "fx_vol": fx_vol,
     }
 
 
-pid_col = "partner_id" if "partner_id" in m.columns else None
+def _savings_by_type(fdf: pd.DataFrame, comp: pd.DataFrame) -> pd.DataFrame:
+    types = [master.type_of(b) for b in fdf["brand"].astype(str)]
+    tmp = pd.DataFrame({
+        "Typ": [_TYPE_LABEL.get(x, "Spezial / n/a") for x in types],
+        "Ersparnis": (comp["wl_net"] - comp["sp_net"]).values,
+    })
+    g = tmp.groupby("Typ", as_index=False)["Ersparnis"].sum()
+    return g[g["Ersparnis"].abs() > 0.005]
 
-# Per-partner table
-einzel_df = pd.DataFrame()
-if pid_col:
-    rows_einzel = {pid: _agg(sub) for pid, sub in m.groupby(pid_col)}
-    einzel_df = pd.DataFrame.from_dict(rows_einzel, orient="index")
-    einzel_df.index.name = "Partner-ID"
 
-# Per-group table
-groups = get_groups(DB_PATH)
-grp_rows = {}
-if pid_col:
-    for gname, pids in groups.items():
+def _monthly(fdf: pd.DataFrame, comp: pd.DataFrame) -> pd.DataFrame:
+    if "_month" not in fdf.columns:
+        return pd.DataFrame()
+    m = fdf.copy()
+    m["WL"] = comp["wl_net"].values
+    m["SP"] = comp["sp_net"].values
+    m["_pb"] = m["brutto"].where(~m["is_refund"], 0.0)
+    out = (m.groupby("_month").agg(WL=("WL", "sum"), SP=("SP", "sum"),
+                                   Umsatz=("_pb", "sum")).reset_index()
+           .rename(columns={"_month": "Monat"}).sort_values("Monat"))
+    return out
+
+
+def _hist(fdf: pd.DataFrame) -> pd.DataFrame:
+    p = fdf[~fdf["is_refund"]].copy()
+    if p.empty:
+        return pd.DataFrame()
+    p["Bucket"] = pd.cut(p["brutto"], bins=HIST_BINS, labels=HIST_LABELS,
+                         right=True, include_lowest=True)
+    return (p.groupby("Bucket", observed=True).agg(Anzahl=("brutto", "count"))
+            .reset_index())
+
+
+def _region(fdf: pd.DataFrame) -> pd.DataFrame:
+    if "region" not in fdf.columns:
+        return pd.DataFrame()
+    p = fdf[~fdf["is_refund"]].copy()
+    g = (p.groupby(p["region"].astype(str).str.strip().str.upper())
+         .agg(Umsatz=("brutto", "sum")).reset_index()
+         .rename(columns={"region": "Region"}))
+    g.columns = ["Region", "Umsatz"]
+    return g[g["Region"].ne("NAN")].sort_values("Umsatz", ascending=False)
+
+
+def _apply_period(df: pd.DataFrame, frm, to) -> pd.Series:
+    if frm and to and "_month" in df.columns:
+        return df["_month"].between(frm, to, inclusive="both")
+    return pd.Series(True, index=df.index)
+
+
+# ── Build engine params (all pages) ───────────────────────────────────────────
+params, offer = build_param_table(master, profile, mode=profile.mode)
+
+# ── SIDEBAR ────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    ui.sidebar_brand()
+    NAV = ["📊  Präsentation", "⇄  Transaktionen", "👥  Partner & Gruppen", "⚙  Einstellungen"]
+    _CLEAN = {n: n.split("  ", 1)[1] for n in NAV}
+    sel = st.radio("Navigation", NAV,
+                   index=[_CLEAN[n] for n in NAV].index(st.session_state.nav),
+                   label_visibility="collapsed")
+    st.session_state.nav = _CLEAN[sel]
+    page = st.session_state.nav
+    st.markdown(
+        '<div style="margin-top:1.4rem;font-size:.7rem;color:#8a9495;'
+        'letter-spacing:.04em">WL Compare · IN ABNAHME<br>IC++ gegen IC++</div>',
+        unsafe_allow_html=True)
+
+df = _ensure_month(st.session_state.df)
+
+# Gate: without data, only Einstellungen is useful.
+if df.empty and page != "Einstellungen":
+    ui.page_header("Willkommen", "Lade zuerst einen Worldline-Export, dann geht's los.",
+                   status="Bereit", meta="WL Compare Tool")
+    ui.info_banner("Noch keine Daten geladen. Wechsle zu <b>⚙ Einstellungen → Daten "
+                   "laden</b> und lade einen Worldline-Export (XLSB/CSV).")
+    st.stop()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: PRÄSENTATION
+# ════════════════════════════════════════════════════════════════════════════
+def page_praesentation() -> None:
+    months = _months(df)
+    pid_col = "partner_id" if "partner_id" in df.columns else None
+
+    # Selection row
+    c1, c2, c3 = st.columns([1.4, 1.4, 1])
+    with c1:
+        scope = st.radio("Auswahl", ["Alle", "Partner", "Gruppe"], horizontal=True,
+                         label_visibility="collapsed")
+    groups = get_groups(DB_PATH)
+    sel_pids = None
+    label = "Alle Partner"
+    with c2:
+        if scope == "Partner" and pid_col:
+            opts = sorted(df[pid_col].dropna().astype(str).unique().tolist())
+            sel_pids = st.multiselect("Partner-ID", opts, default=opts[:1] or opts,
+                                      label_visibility="collapsed",
+                                      placeholder="Partner-ID wählen")
+            label = ", ".join(sel_pids) if sel_pids else "Alle Partner"
+        elif scope == "Gruppe" and groups:
+            gname = st.selectbox("Gruppe", list(groups.keys()),
+                                 label_visibility="collapsed")
+            sel_pids = groups.get(gname, [])
+            label = f"Gruppe «{gname}»"
+        elif scope == "Gruppe":
+            st.caption("Noch keine Gruppen — unter «Partner & Gruppen» anlegen.")
+    with c3:
+        annual_vol = st.number_input("Jahresumsatz CHF", min_value=0.0, value=0.0,
+                                     step=10000.0, format="%.0f",
+                                     help="Für die Jahres-Hochrechnung. 0 = Zeitraum-Ist.")
+    frm = to = None
+    if len(months) >= 2:
+        frm, to = st.select_slider("Zeitraum", options=months,
+                                   value=(months[0], months[-1]))
+    elif months:
+        frm = to = months[0]
+
+    # Filter
+    mask = pd.Series(True, index=df.index)
+    if sel_pids is not None and pid_col:
+        mask &= df[pid_col].astype(str).isin(sel_pids)
+    mask &= _apply_period(df, frm, to)
+    fdf = df[mask].reset_index(drop=True)
+
+    partner_disp = label
+    if scope == "Partner" and sel_pids and "partner_name" in fdf.columns and not fdf.empty:
+        names = fdf["partner_name"].dropna().unique().tolist()
+        if len(names) == 1:
+            partner_disp = names[0]
+
+    ui.page_header(
+        f"Auswertung · {partner_disp}",
+        "Dein Konditionenvergleich Worldline gegen SwiPay auf einen Blick.",
+        status="IN ABNAHME",
+        meta=f"Zeitraum {frm or '–'} bis {to or '–'} · IC++ gegen IC++",
+    )
+
+    if fdf.empty:
+        ui.info_banner("Keine Transaktionen für diese Auswahl.")
+        return
+
+    comp = run_comparison(fdf, params, offer, profile.dcc_pct)
+    t = engine_totals(comp)
+    d = _derive(fdf, comp, t)
+
+    # ── HERO: Jahres-Ersparnis (Hochrechnung) ─────────────────────────────────
+    proj = None
+    if annual_vol > 0:
+        try:
+            proj = project_tier_b(fdf, params, offer, profile.dcc_pct,
+                                  annual_volume=annual_vol)
+        except ValueError:
+            proj = None
+    hcol, kcol = st.columns([1.15, 1])
+    with hcol:
+        if proj is not None:
+            cov = proj.coverage
+            headline = (proj.band_low if cov.label == CoverageLabel.INDICATIVE
+                        else proj.saving_annual)
+            acc = ui.GREEN if headline >= 0 else ui.ROT
+            cov_txt = {CoverageLabel.SIMULATABLE: "hohe Deckung",
+                       CoverageLabel.LOW_COVERAGE: "mittlere Deckung",
+                       CoverageLabel.INDICATIVE: "indikativ"}[cov.label]
+            ui.hero("Ersparnis pro Jahr (Hochrechnung)", f"CHF {chf(headline, 0)}",
+                    band=f"Planungsband CHF {chf(proj.band_low, 0)} – {chf(proj.band_high, 0)}",
+                    foot=f"Deckungsgrad {cov.coverage_pct:.0%} · {cov_txt} · "
+                         f"DCC-Vorteil p.a. CHF {chf(proj.dcc_advantage_annual, 0)}",
+                    accent=acc)
+        else:
+            acc = ui.GREEN if d["diff"] >= 0 else ui.ROT
+            ui.hero("Ersparnis im Zeitraum", f"CHF {chf(d['diff'], 0)}",
+                    foot="Jahresumsatz oben eingeben für die Hochrechnung auf 12 Monate.",
+                    accent=acc)
+    with kcol:
+        rel = (d["diff"] / abs(t["wl_net"]) * 100) if t["wl_net"] else 0.0
+        ui.kpi_row([
+            {"label": "Bruttoumsatz", "value": f"CHF {chf_c(d['brutto'])}", "accent": ui.BLUE},
+            {"label": "Gebühren-Red.", "value": f"{rel:.1f} %",
+             "foot": "vs. Worldline", "accent": ui.GREEN if rel >= 0 else ui.ROT},
+        ])
+        ui.kpi_row([
+            {"label": "Transaktionen", "value": num(d["n_txn"]),
+             "foot": f"{num(d['n_purch'])} Käufe", "accent": ui.CYAN},
+            {"label": "DCC-Vorteil", "value": f"CHF {chf(d['dcc_adv'])}", "accent": ui.CYAN},
+        ])
+
+    # ── Ersparnis-Vergleich ───────────────────────────────────────────────────
+    ui.section("Ersparnis-Vergleich", "Worldline gegen SwiPay (netto)")
+    a, b = st.columns(2)
+    with a:
+        st.altair_chart(ui.chart_fees_compare(t["wl_net"], t["sp_net"]),
+                        use_container_width=True)
+    with b:
+        sbt = _savings_by_type(fdf, comp)
+        if not sbt.empty:
+            st.altair_chart(ui.chart_savings_by_type(sbt), use_container_width=True)
+        else:
+            st.caption("Keine offerierbaren Brands mit Effekt in dieser Auswahl.")
+
+    # ── DCC-Visualisierung ─────────────────────────────────────────────────────
+    ui.section("DCC", "Cashback & Fremdwährungs-Potenzial")
+    a, b = st.columns(2)
+    with a:
+        st.altair_chart(ui.chart_dcc_compare(t["wl_cashback"], t["sp_cashback"]),
+                        use_container_width=True)
+        st.caption(f"WL-DCC-Ø { (t['wl_cashback']/d['dcc_vol']*100) if d['dcc_vol'] else 0:.2f} %"
+                   f" · SP-Satz {profile.dcc_pct*100:.2f} % vom genutzten DCC-Volumen "
+                   f"(CHF {chf(d['dcc_vol'])}).")
+    with b:
+        st.altair_chart(ui.chart_dcc_potential(d["dcc_vol"], d["fx_vol"]),
+                        use_container_width=True)
+        share = d["dcc_vol"] / d["fx_vol"] if d["fx_vol"] else 0.0
+        st.caption(f"Genutzt CHF {chf(d['dcc_vol'])} von DCC-fähigem Fremdwährungsvolumen "
+                   f"CHF {chf(d['fx_vol'])} ({share:.0%}).")
+
+    # ── Zeit & Verteilung ──────────────────────────────────────────────────────
+    ui.section("Zeit & Verteilung", "Monatsverlauf, Transaktionsgrössen, Regionen")
+    mdf = _monthly(fdf, comp)
+    if not mdf.empty and len(mdf) >= 2:
+        a, b = st.columns([1.4, 1])
+        with a:
+            st.altair_chart(ui.chart_monthly(mdf[["Monat", "WL", "SP"]]),
+                            use_container_width=True)
+        with b:
+            st.altair_chart(ui.chart_volume_monthly(mdf[["Monat", "Umsatz"]]),
+                            use_container_width=True)
+    a, b = st.columns(2)
+    with a:
+        h = _hist(fdf)
+        if not h.empty:
+            st.altair_chart(ui.chart_hist(h), use_container_width=True)
+    with b:
+        r = _region(fdf)
+        if not r.empty:
+            st.altair_chart(ui.chart_region(r), use_container_width=True)
+
+    # ── Export ─────────────────────────────────────────────────────────────────
+    ui.section("Export")
+    zero_brands = sorted(fdf.loc[~comp["offerable"], "brand"].dropna().unique().tolist()) \
+        if "brand" in fdf.columns else []
+    a, b = st.columns(2)
+    with a:
+        if st.button("Kunden-PDF generieren", type="primary"):
+            try:
+                pdf_bytes = build_pdf(
+                    partner_name=partner_disp, period_from=frm or "–", period_to=to or "–",
+                    brutto=d["brutto"], n_txn=d["n_txn"], n_terminals=d["n_term"],
+                    avg_ticket=d["avg_ticket"], wl_net=t["wl_net"], sp_net=t["sp_net"],
+                    wl_cashback=t["wl_cashback"], sp_cashback=t["sp_cashback"],
+                    saving=d["diff"], dcc_advantage=d["dcc_adv"], dcc_pct=profile.dcc_pct,
+                    projection=proj, annual_volume=annual_vol,
+                    fanout_partner_ids=(st.session_state.report.fanout_partner_ids
+                                        if st.session_state.report else []),
+                    zero_effect_brands=zero_brands,
+                    mix_hints=proj.mix_hints if proj else [])
+                st.download_button("PDF herunterladen", data=pdf_bytes,
+                    file_name=f"SwiPay_Analyse_{partner_disp}_{frm}_{to}.pdf"
+                    .replace(" ", "_").replace(",", "").replace("/", "-"),
+                    mime="application/pdf")
+            except Exception as exc:
+                st.error(f"PDF-Fehler: {exc}")
+    with b:
+        st.download_button("Detail-CSV herunterladen",
+                           data=build_csv(fdf, comp).encode("utf-8-sig"),
+                           file_name=f"SwiPay_Detail_{frm}_{to}.csv", mime="text/csv")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: TRANSAKTIONEN
+# ════════════════════════════════════════════════════════════════════════════
+_BRAND_ICON = {"Visa": "VISA", "VisaDebit": "VISA", "Mastercard": "MC",
+               "Debit Mastercard": "MC", "Maestro": "MAE", "TWINT": "TW"}
+
+
+def page_transaktionen() -> None:
+    ui.page_header("Transaktionen", "Filtern, prüfen, veranschaulichen.",
+                   status="Live", meta="Detailansicht je Transaktion")
+    months = _months(df)
+
+    with st.expander("Filter", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        def ms(label, col, c):
+            if col not in df.columns:
+                return None
+            opts = sorted(df[col].dropna().astype(str).unique().tolist())
+            return c.multiselect(label, opts, default=opts)
+        sel_brand = ms("Brand", "brand", c1)
+        sel_cat   = ms("Kategorie", "category", c2)
+        sel_reg   = ms("Clearing Region", "region", c3)
+        frm = to = None
+        if len(months) >= 2:
+            frm, to = st.select_slider("Zeitraum", options=months,
+                                       value=(months[0], months[-1]))
+        elif months:
+            frm = to = months[0]
+
+    mask = _apply_period(df, frm, to)
+    for col, sel in [("brand", sel_brand), ("category", sel_cat), ("region", sel_reg)]:
+        if sel is not None and col in df.columns:
+            mask &= df[col].astype(str).isin(sel)
+    fdf = df[mask].reset_index(drop=True)
+    if fdf.empty:
+        ui.info_banner("Keine Transaktionen für diese Auswahl.")
+        return
+
+    comp = run_comparison(fdf, params, offer, profile.dcc_pct)
+    t = engine_totals(comp)
+    d = _derive(fdf, comp, t)
+    ui.kpi_row([
+        {"label": "Transaktionen", "value": num(d["n_txn"]), "accent": ui.CYAN},
+        {"label": "Bruttoumsatz", "value": f"CHF {chf_c(d['brutto'])}", "accent": ui.BLUE},
+        {"label": "Ø Ticket", "value": f"CHF {chf(d['avg_ticket'])}", "accent": ui.CYAN},
+        {"label": "Ersparnis", "value": f"CHF {chf(d['diff'])}",
+         "accent": ui.GREEN if d["diff"] >= 0 else ui.ROT},
+    ])
+
+    ui.section("Letzte Transaktionen", f"{num(min(len(fdf), 200))} von {num(len(fdf))}")
+    show = fdf.copy()
+    show["wl"] = comp["wl_net"].values
+    show["sp"] = comp["sp_net"].values
+    cols = [c for c in ["datum", "zeit", "brand", "category", "terminal_id",
+                        "region", "brutto", "wl", "sp"] if c in show.columns]
+    disp = show[cols].head(200).rename(columns={
+        "datum": "Datum", "zeit": "Zeit", "brand": "Brand", "category": "Kategorie",
+        "terminal_id": "Terminal", "region": "Region", "brutto": "Betrag",
+        "wl": "WL-Geb.", "sp": "SP-Geb."})
+    if "Datum" in disp:
+        disp["Datum"] = _to_datetime(disp["Datum"]).dt.strftime("%d.%m.%Y")
+    if "Zeit" in disp:
+        secs = pd.to_numeric(disp["Zeit"], errors="coerce") * 86400
+        disp["Zeit"] = secs.apply(
+            lambda x: f"{int(x // 3600):02d}:{int((x % 3600) // 60):02d}"
+            if pd.notna(x) else "")
+    for c in ["Betrag", "WL-Geb.", "SP-Geb."]:
+        if c in disp:
+            disp[c] = disp[c].apply(lambda x: chf(float(x)) if pd.notna(x) else "")
+    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+    ui.section("Verteilung")
+    a, b = st.columns(2)
+    with a:
+        h = _hist(fdf)
+        if not h.empty:
+            st.altair_chart(ui.chart_hist(h), use_container_width=True)
+    with b:
+        r = _region(fdf)
+        if not r.empty:
+            st.altair_chart(ui.chart_region(r), use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: PARTNER & GRUPPEN
+# ════════════════════════════════════════════════════════════════════════════
+_MONEY = ["Umsatz", "Ø Ticket", "WL-Geb.", "SP-Geb.", "Diff.", "DCC-Vtl."]
+
+
+def page_partner() -> None:
+    ui.page_header("Partner & Gruppen", "Einzelne Partner vergleichen und bündeln.",
+                   status="Aktiv", meta="Gruppierung nach Partner-ID")
+    pid_col = "partner_id" if "partner_id" in df.columns else None
+    if not pid_col:
+        ui.info_banner("Keine Partner-ID-Spalte in den Daten.")
+        return
+
+    comp = run_comparison(df, params, offer, profile.dcc_pct)
+    m = df.copy()
+    m["wl_net"], m["sp_net"] = comp["wl_net"].values, comp["sp_net"].values
+    m["wl_cb"], m["sp_cb"] = comp["wl_cashback"].values, comp["sp_cashback"].values
+
+    def agg(sub: pd.DataFrame) -> dict:
+        pu = sub[~sub["is_refund"]]
+        n = len(pu)
+        return {
+            "Name": str(sub["partner_name"].iloc[0]) if "partner_name" in sub and n else "",
+            "Umsatz": round(float(pu["brutto"].sum()), 2), "Txn": len(sub),
+            "Ø Ticket": round(float(pu["brutto"].mean()), 2) if n else 0.0,
+            "WL-Geb.": round(float(sub["wl_net"].sum()), 2),
+            "SP-Geb.": round(float(sub["sp_net"].sum()), 2),
+            "Diff.": round(float(sub["wl_net"].sum() - sub["sp_net"].sum()), 2),
+            "DCC-Vtl.": round(float(sub["sp_cb"].sum() - sub["wl_cb"].sum()), 2),
+        }
+
+    def fmt(d_in: pd.DataFrame) -> pd.DataFrame:
+        o = d_in.copy()
+        for c in _MONEY:
+            if c in o:
+                o[c] = o[c].apply(lambda x: chf(float(x)) if pd.notna(x) else "")
+        if "Txn" in o:
+            o["Txn"] = o["Txn"].apply(lambda x: num(int(x)))
+        return o
+
+    ui.section("Einzelansicht")
+    rows = {pid: agg(sub) for pid, sub in m.groupby(pid_col)}
+    edf = pd.DataFrame.from_dict(rows, orient="index"); edf.index.name = "Partner-ID"
+    st.dataframe(fmt(edf), use_container_width=True)
+
+    groups = get_groups(DB_PATH)
+    ui.section("Gruppenansicht")
+    grows = {}
+    for g, pids in groups.items():
         sub = m[m[pid_col].astype(str).isin(pids)]
         if sub.empty:
             continue
-        row = _agg(sub)
-        row["Partner-IDs"] = ", ".join(pids)
-        grp_rows[gname] = row
-grp_df = pd.DataFrame.from_dict(grp_rows, orient="index") if grp_rows else pd.DataFrame()
-
-col_e, col_g = st.columns(2)
-
-with col_e:
-    st.subheader("Einzelansicht")
-    if not einzel_df.empty:
-        st.dataframe(_fmt_df(einzel_df, _MONEY, _CNTS), use_container_width=True)
+        row = agg(sub); row["Partner-IDs"] = ", ".join(pids); grows[g] = row
+    if grows:
+        gdf = pd.DataFrame.from_dict(grows, orient="index")
+        st.dataframe(fmt(gdf[["Partner-IDs"] + _MONEY + ["Txn"]]), use_container_width=True)
     else:
-        st.info("Keine Partner-ID-Spalte in den Daten.")
+        st.caption("Noch keine Gruppen definiert.")
 
-with col_g:
-    st.subheader("Gruppenansicht")
-    if not grp_df.empty:
-        show_cols = ["Partner-IDs"] + [c for c in _MONEY + _CNTS if c in grp_df.columns]
-        st.dataframe(
-            _fmt_df(grp_df[show_cols], _MONEY, _CNTS),
-            use_container_width=True,
-        )
-    else:
-        st.info("Noch keine Gruppen definiert.")
-
-# Group management
-with st.expander("Gruppen verwalten"):
-    c_new, c_del = st.columns(2)
-    with c_new:
-        st.markdown("**Neue Gruppe / Zuordnung**")
-        g_name = st.text_input("Gruppenname", key="g_name_in")
-        if pid_col:
-            all_pids = sorted(df[pid_col].dropna().astype(str).unique().tolist())
-            g_pids   = st.multiselect("Partner-IDs zuweisen", all_pids, key="g_pids_in")
-        else:
-            g_pids = []
-        if st.button("Gruppe speichern") and g_name.strip() and g_pids:
-            assign_group(DB_PATH, g_name.strip(), g_pids)
-            st.success(f"Gruppe «{g_name.strip()}» gespeichert.")
-            st.rerun()
-
-    with c_del:
-        st.markdown("**Gruppe entfernen**")
+    ui.section("Gruppen verwalten")
+    c1, c2 = st.columns(2)
+    with c1:
+        gname = st.text_input("Gruppenname")
+        all_pids = sorted(df[pid_col].dropna().astype(str).unique().tolist())
+        gpids = st.multiselect("Partner-IDs zuweisen", all_pids)
+        if st.button("Gruppe speichern", type="primary") and gname.strip() and gpids:
+            assign_group(DB_PATH, gname.strip(), gpids)
+            st.success(f"Gruppe «{gname.strip()}» gespeichert."); st.rerun()
+    with c2:
         if groups:
-            del_name = st.selectbox("Gruppe", list(groups.keys()), key="g_del_sel")
-            if st.button("Entfernen") and del_name:
-                unassign_group(DB_PATH, groups[del_name])
-                st.success(f"Gruppe «{del_name}» entfernt.")
-                st.rerun()
+            dname = st.selectbox("Gruppe entfernen", list(groups.keys()))
+            if st.button("Entfernen") and dname:
+                unassign_group(DB_PATH, groups[dname])
+                st.success(f"Gruppe «{dname}» entfernt."); st.rerun()
         else:
-            st.info("Keine Gruppen vorhanden.")
+            st.caption("Keine Gruppen vorhanden.")
 
-# ── Analysen (Charts) ─────────────────────────────────────────────────────────
-st.header("Analysen")
 
-tab_hist, tab_monthly = st.tabs(["Transaktionsgrössen", "Monatsverlauf"])
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: EINSTELLUNGEN  (Upload · Mapping · ASF)
+# ════════════════════════════════════════════════════════════════════════════
+def page_einstellungen() -> None:
+    ui.page_header("Einstellungen", "Daten laden, Brands mappen, ASF-Konditionen pflegen.",
+                   status="Konfiguration", meta="Upload · Mapping · ASF")
+    tab_up, tab_map, tab_asf = st.tabs(["Daten laden", "Mapping (Brands)", "ASF & DCC"])
 
-with tab_hist:
-    purch_hist = fdf[~fdf["is_refund"]].copy()
-    if purch_hist.empty:
-        st.info("Keine Kauftransaktionen für die aktuelle Selektion.")
-    else:
-        purch_hist["Bucket"] = pd.cut(
-            purch_hist["brutto"],
-            bins=HIST_BINS,
-            labels=HIST_LABELS,
-            right=True,
-            include_lowest=True,
-        )
-        hist = (
-            purch_hist.groupby("Bucket", observed=True)
-            .agg(Anzahl=("brutto", "count"), Umsatz=("brutto", "sum"))
-            .reset_index()
-        )
-        hist_show = hist.copy()
-        hist_show["Umsatz CHF"] = hist_show["Umsatz"].apply(chf)
-        hist_show["Anzahl"]     = hist_show["Anzahl"].apply(_int_fmt)
-        st.dataframe(
-            hist_show[["Bucket", "Anzahl", "Umsatz CHF"]],
-            use_container_width=True,
-            hide_index=True,
-        )
-        st.bar_chart(hist.set_index("Bucket")[["Anzahl"]])
+    # ── Upload ──
+    with tab_up:
+        ui.section("Worldline-Export laden")
+        uploaded = st.file_uploader("Worldline-Exporte (XLSB / CSV)",
+                                    type=["xlsb", "csv"], accept_multiple_files=True)
+        sheet_val = st.text_input("Sheet-Name (XLSB, leer = erstes Sheet)", value="WL")
+        if uploaded and st.button("Laden & prüfen", type="primary"):
+            tmp_dir = tempfile.mkdtemp(); paths = []
+            for f in uploaded:
+                p = str(Path(tmp_dir) / f.name)
+                with open(p, "wb") as fh:
+                    fh.write(f.read())
+                paths.append(p)
+            try:
+                dfn, rpt = ingest_files(paths, DB_PATH, sheet=sheet_val.strip() or None)
+                st.session_state.df = dfn; st.session_state.report = rpt
+                st.success(f"{num(rpt.rows_new)} Zeilen geladen.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Fehler beim Laden: {exc}")
+            finally:
+                import shutil
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
-with tab_monthly:
-    if "_month" not in fdf.columns:
-        st.info("Keine Datumsinformation verfügbar.")
-    else:
-        m_chart = fdf.copy()
-        m_chart["_purch_brutto"] = m_chart["brutto"].where(~m_chart["is_refund"], 0.0)
-        m_chart["wl_net"]        = comp["wl_net"].values
-        m_chart["sp_net"]        = comp["sp_net"].values
+        # Convenience: load an export already present in data/ (no re-upload).
+        existing = sorted(p.name for ext in ("*.xlsb", "*.csv")
+                          for p in (ROOT / "data").glob(ext))
+        if existing:
+            pick = st.selectbox("Oder vorhandene Datei aus data/ laden",
+                                ["—"] + existing)
+            if st.button("Aus data/ laden") and pick != "—":
+                try:
+                    dfn, rpt = ingest_files([str(ROOT / "data" / pick)], DB_PATH,
+                                            sheet=sheet_val.strip() or None)
+                    st.session_state.df = dfn; st.session_state.report = rpt
+                    st.success(f"«{pick}» geladen.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Fehler beim Laden: {exc}")
 
-        monthly = (
-            m_chart.groupby("_month")
-            .agg(
-                Umsatz=("_purch_brutto", "sum"),
-                WL_Geb=("wl_net", "sum"),
-                SP_Geb=("sp_net", "sum"),
-                Txn=("brutto", "count"),
-            )
-            .sort_index()
-            .rename(columns={"WL_Geb": "WL-Geb.", "SP_Geb": "SP-Geb."})
-        )
-        monthly.index.name = "Monat"
+        rpt = st.session_state.report
+        if rpt is not None:
+            ui.section("Abgleichsbericht")
+            ui.kpi_row([
+                {"label": "Neue Zeilen", "value": num(rpt.rows_new), "accent": ui.GREEN},
+                {"label": "Übersprungen", "value": num(rpt.rows_skipped_overlap),
+                 "accent": ui.CYAN},
+                {"label": "Blockierte Dateien", "value": str(len(rpt.files_blocked_hash)),
+                 "accent": ui.ORANGE},
+            ])
+            if rpt.files_blocked_hash:
+                st.warning(f"Bit-identisch blockiert: {', '.join(rpt.files_blocked_hash)}")
+            if rpt.fanout_partner_ids:
+                st.warning(f"Fan-out-Verdacht: {', '.join(rpt.fanout_partner_ids)} — "
+                           "vor Auswertung manuell prüfen.")
+        if not df.empty:
+            data_brands = df["brand"].dropna().astype(str).unique().tolist() \
+                if "brand" in df else []
+            _, unmapped = master.reconcile(data_brands)
+            if unmapped:
+                st.error("Unbekannte Brands (nicht in der Stammliste): "
+                         + ", ".join(f"«{b}»" for b in unmapped)
+                         + " — im Tab «Mapping» pflegen. Werden sonst wie nicht-"
+                         "anbietbar behandelt (Worldline 1:1).")
+            else:
+                st.success("Alle Brands im Export sind der Stammliste zugeordnet.")
 
-        monthly_show = monthly.copy()
-        monthly_show["Umsatz CHF"]   = monthly_show["Umsatz"].apply(chf)
-        monthly_show["WL-Geb. CHF"]  = monthly_show["WL-Geb."].apply(chf)
-        monthly_show["SP-Geb. CHF"]  = monthly_show["SP-Geb."].apply(chf)
-        monthly_show["Txn"]          = monthly_show["Txn"].apply(_int_fmt)
-        st.dataframe(
-            monthly_show[["Umsatz CHF", "WL-Geb. CHF", "SP-Geb. CHF", "Txn"]],
-            use_container_width=True,
-        )
-        st.caption("Gebühren je Monat")
-        st.line_chart(monthly[["WL-Geb.", "SP-Geb."]])
-        st.caption("Umsatz je Monat")
-        st.bar_chart(monthly[["Umsatz"]])
+    # ── Mapping ──
+    with tab_map:
+        ui.section("Brand-Stammliste", "git-versioniert · config/brands.json")
+        st.caption("Logisches Brand = ein/mehrere Such-Codes (Aliase). Typ steuert die "
+                   "ASF. Spezial-Brands sind nie anbietbar (Worldline 1:1).")
+        rows = [{"Anzeigename": r.display_name, "Typ": r.type, "Anbietbar": r.offerable,
+                 "Reihenfolge": r.order, "Such-Codes": ", ".join(r.search_codes)}
+                for r in master.sorted_brands()]
+        edit = st.data_editor(pd.DataFrame(rows), hide_index=True, num_rows="dynamic",
+            use_container_width=True, column_config={
+                "Typ": st.column_config.SelectboxColumn(
+                    options=["debit", "credit", "credit2", "spezial"]),
+                "Anbietbar": st.column_config.CheckboxColumn()}, key="master_editor")
+        if st.button("Stammliste speichern", type="primary"):
+            try:
+                recs = []
+                for _, r in edit.iterrows():
+                    name = str(r["Anzeigename"]).strip()
+                    if not name:
+                        continue
+                    codes = [c.strip() for c in str(r["Such-Codes"]).split(",") if c.strip()]
+                    recs.append(BrandRecord(name, str(r["Typ"]).strip(),
+                                            bool(r["Anbietbar"]), int(r["Reihenfolge"]),
+                                            codes or [name]))
+                nm = BrandMaster(recs); nm.save(); st.session_state.master = nm
+                st.success("Stammliste gespeichert (config/brands.json)."); st.rerun()
+            except Exception as exc:
+                st.error(f"Konnte nicht speichern: {exc}")
 
-# ── Export ────────────────────────────────────────────────────────────────────
-st.header("Export")
+    # ── ASF & DCC ──
+    with tab_asf:
+        ui.section("Konditionen", "ASF · Trx-Fee · Mindestgebühr · DCC")
+        st.caption("ASF-Sätze sind Platzhalter (bewusst hoch). Vor jedem Kundenlauf das "
+                   "echte SwiPay-Preisblatt eintragen.")
+        new_mode = st.radio("Eingabemodus", ["schnell", "experte"],
+            format_func=lambda m: "Schnellmodus" if m == "schnell"
+            else "Expertenmodus (pro Brand)", horizontal=True,
+            index=0 if profile.mode == "schnell" else 1)
+        if new_mode != profile.mode:
+            if new_mode == "experte":
+                profile.brand_overrides = prefill_brand_overrides(master, profile)
+            else:
+                coll = conservative_collapse(master, profile)
+                st.session_state.profile = coll
+                for _t in OFFERABLE_TYPES:
+                    st.session_state[f"asf_{_t}"] = round(coll.type_rates[_t].asf_pct*100, 4)
+                    st.session_state[f"trx_{_t}"] = round(coll.type_rates[_t].trx_fee*100, 4)
+                    st.session_state[f"mf_{_t}"]  = round(coll.type_rates[_t].min_fee, 2)
+                st.info("Expertenwerte konservativ zusammengefasst (höchster Wert je Typ "
+                        "und Variable). Brand-Werte bleiben erhalten.")
+            profile.mode = new_mode
+            st.session_state.profile = profile
 
-def _period_bounds(df_in: pd.DataFrame) -> tuple[str, str]:
-    if "_month" in df_in.columns:
-        months = sorted(df_in["_month"].dropna().unique().tolist())
-        if months:
-            return months[0], months[-1]
-    if "datum" in df_in.columns:
-        dates = pd.to_datetime(df_in["datum"], dayfirst=True, errors="coerce").dropna()
-        if not dates.empty:
-            return dates.min().strftime("%Y-%m"), dates.max().strftime("%Y-%m")
-    return "–", "–"
+        profile.dcc_pct = st.number_input("SwiPay DCC-Satz (%)", min_value=0.0,
+                                          max_value=5.0, step=0.05, format="%.2f",
+                                          key="dcc_in") / 100.0
 
-def _partner_display(df_in: pd.DataFrame) -> str:
-    if "partner_name" in df_in.columns:
-        names = df_in["partner_name"].dropna().unique().tolist()
-        if names:
-            return names[0] if len(names) == 1 else ", ".join(names[:3])
-    if "partner_id" in df_in.columns:
-        pids = df_in["partner_id"].dropna().unique().tolist()
-        if pids:
-            return pids[0] if len(pids) == 1 else f"{pids[0]} (+{len(pids)-1})"
-    return "–"
+        if profile.mode == "schnell":
+            cols = st.columns(3)
+            for col, tkey in zip(cols, OFFERABLE_TYPES):
+                with col:
+                    st.markdown(f"**{_TYPE_LABEL[tkey]}**")
+                    ap = st.number_input("ASF %", min_value=0.0, max_value=2.0, step=0.01,
+                        format="%.3f", key=f"asf_{tkey}") / 100.0
+                    tr = st.number_input("Trx-Fee (Rp.)", min_value=0.0, max_value=50.0,
+                        step=0.5, format="%.2f", key=f"trx_{tkey}") / 100.0
+                    mf = st.number_input("Mindestgeb. CHF", min_value=0.0, step=0.01,
+                        format="%.2f", key=f"mf_{tkey}")
+                    profile.type_rates[tkey] = TypeRate(ap, tr, mf)
+        else:
+            ov = profile.brand_overrides or prefill_brand_overrides(master, profile)
+            rows = []
+            for rec in master.offerable_brands():
+                tr = ov.get(rec.display_name) or profile.type_rates[rec.type]
+                rows.append({"Brand": rec.display_name, "Typ": _TYPE_LABEL.get(rec.type, rec.type),
+                             "ASF %": round(tr.asf_pct*100, 4),
+                             "Trx-Fee Rp.": round(tr.trx_fee*100, 2),
+                             "Min CHF": round(tr.min_fee, 2)})
+            ed = st.data_editor(pd.DataFrame(rows), hide_index=True,
+                use_container_width=True, disabled=["Brand", "Typ"], key="expert_editor")
+            profile.brand_overrides = {
+                str(r["Brand"]): TypeRate(float(r["ASF %"])/100.0,
+                                          float(r["Trx-Fee Rp."])/100.0, float(r["Min CHF"]))
+                for _, r in ed.iterrows()}
+        st.session_state.profile = profile
 
-zero_effect_brands = sorted(
-    fdf.loc[~comp["offerable"], "brand"].dropna().unique().tolist()
-) if "brand" in fdf.columns else []
 
-pf, pt      = _period_bounds(fdf)
-pname       = _partner_display(fdf)
-fanout_ids  = (rpt.fanout_partner_ids if rpt else [])
-proj_ref    = None
-try:
-    if annual_vol > 0:
-        proj_ref = project_tier_b(fdf, params, offer, profile.dcc_pct, annual_volume=annual_vol)
-except ValueError:
-    pass
-
-col_pdf, col_csv = st.columns(2)
-
-with col_pdf:
-    st.subheader("Kunden-PDF")
-    st.caption(
-        "Zusammenfassung in SwiPay-CI: Ersparnis, DCC-Vorteil, "
-        "Hochrechnung und Datenhinweise."
-    )
-    if st.button("PDF generieren", type="primary"):
-        try:
-            mix_h = proj_ref.mix_hints if proj_ref else []
-            pdf_bytes = build_pdf(
-                partner_name       = pname,
-                period_from        = pf,
-                period_to          = pt,
-                brutto             = brutto_sum,
-                n_txn              = n_txn,
-                n_terminals        = n_term,
-                avg_ticket         = avg_ticket,
-                wl_net             = t["wl_net"],
-                sp_net             = t["sp_net"],
-                wl_cashback        = t["wl_cashback"],
-                sp_cashback        = t["sp_cashback"],
-                saving             = diff,
-                dcc_advantage      = dcc_adv,
-                dcc_pct            = profile.dcc_pct,
-                projection         = proj_ref,
-                annual_volume      = annual_vol,
-                fanout_partner_ids = fanout_ids,
-                zero_effect_brands = zero_effect_brands,
-                mix_hints          = mix_h,
-            )
-            fname = (
-                f"SwiPay_Analyse_{pname.replace(' ','_')}_{pf}_{pt}.pdf"
-                .replace(",", "").replace("/", "-")
-            )
-            st.download_button(
-                "PDF herunterladen",
-                data=pdf_bytes,
-                file_name=fname,
-                mime="application/pdf",
-            )
-        except Exception as exc:
-            st.error(f"PDF-Fehler: {exc}")
-
-with col_csv:
-    st.subheader("Interner Detail-Export")
-    st.caption(
-        "Alle Worldline-Felder plus Engine-KPIs (wl_net, sp_net, "
-        "wl_cashback, sp_cashback, floored, offerable), ungefiltert aus der Selektion."
-    )
-    csv_str = build_csv(fdf, comp)
-    st.download_button(
-        "CSV herunterladen",
-        data=csv_str.encode("utf-8-sig"),
-        file_name=f"SwiPay_Detail_{pf}_{pt}.csv",
-        mime="text/csv",
-    )
+# ── Router ──────────────────────────────────────────────────────────────────
+if page == "Präsentation":
+    page_praesentation()
+elif page == "Transaktionen":
+    page_transaktionen()
+elif page == "Partner & Gruppen":
+    page_partner()
+else:
+    page_einstellungen()

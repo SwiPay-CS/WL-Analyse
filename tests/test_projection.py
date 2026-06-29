@@ -101,6 +101,22 @@ def test_tier_a_exact_when_scale_is_one():
     assert result.tier            == "A"
 
 
+def test_projection_ignores_empty_trailing_row():
+    """A blank trailing row (all-NaN, as real WL exports carry) must not poison
+    the projection with NaN — observed volume is summed nan-safe."""
+    import numpy as np
+    df = _sample_df()
+    blank = {c: np.nan for c in df.columns}
+    blank["is_refund"] = False
+    blank["is_dcc"] = False
+    df = pd.concat([df, pd.DataFrame([blank])], ignore_index=True)
+
+    res = project_tier_b(df, PARAMS, OFFER, DCC_RATE, annual_volume=10_000.0)
+    assert np.isfinite(res.saving_annual)
+    assert np.isfinite(res.band_low) and np.isfinite(res.band_high)
+    assert res.observed_volume == pytest.approx(135.0)  # blank row contributes 0
+
+
 # ---------------------------------------------------------------------------
 # Test 2: Tier B – Davos worst-case analogue (~22 % coverage) is "indikativ"
 # ---------------------------------------------------------------------------
