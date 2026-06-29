@@ -227,16 +227,20 @@ def chart_fees_compare(wl_net: float, sp_net: float) -> alt.Chart:
         "Gebühren": [wl_net, sp_net],
     })
     df["lbl"] = df["Gebühren"].map(lambda v: chf(v, 0))
+    lo, hi = min(0.0, wl_net, sp_net), max(0.0, wl_net, sp_net)
+    pad = (hi - lo) * 0.18 or 1.0
     bars = (
-        alt.Chart(df).mark_bar(size=70, cornerRadiusEnd=6)
+        alt.Chart(df).mark_bar(size=56, cornerRadiusEnd=6)
         .encode(
-            x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"]),
-            y=alt.Y("Gebühren:Q", axis=_chf_axis("Netto-Gebühren CHF")),
+            x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"],
+                    scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5)),
+            y=alt.Y("Gebühren:Q", axis=_chf_axis("Netto-Gebühren CHF"),
+                    scale=alt.Scale(domain=[lo, hi + pad], nice=False)),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
                 domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, ROT]), legend=None),
         )
     )
-    labels = bars.mark_text(dy=-10, font=_FONT, fontWeight="bold",
+    labels = bars.mark_text(dy=-10, clip=False, font=_FONT, fontWeight="bold",
                             color=ANTHRAZIT, fontSize=13).encode(
         text=alt.Text("lbl:N"))
     return _base(bars + labels)
@@ -244,35 +248,46 @@ def chart_fees_compare(wl_net: float, sp_net: float) -> alt.Chart:
 
 def chart_savings_by_type(df: pd.DataFrame) -> alt.Chart:
     """df columns: Typ, Ersparnis (wl_net - sp_net per brand type)."""
-    df = df.copy()
+    df = df.copy().sort_values("Ersparnis")
     df["lbl"] = df["Ersparnis"].map(lambda v: chf(v, 0))
-    bars = (
-        alt.Chart(df).mark_bar(size=44, cornerRadiusEnd=6)
-        .encode(
-            y=alt.Y("Typ:N", title=None, sort="-x"),
-            x=alt.X("Ersparnis:Q", axis=_chf_axis("Ersparnis CHF")),
-            color=alt.condition(alt.datum.Ersparnis >= 0,
-                                alt.value(GREEN), alt.value(ROT)),
-        )
+    order = df["Typ"].tolist()
+    lo, hi = min(0.0, df["Ersparnis"].min()), max(0.0, df["Ersparnis"].max())
+    pad = (hi - lo) * 0.24 or 1.0
+    yenc = alt.Y("Typ:N", title=None, sort=order,
+                 scale=alt.Scale(paddingInner=0.45, paddingOuter=0.35))
+    base = alt.Chart(df)
+    bars = base.mark_bar(cornerRadiusEnd=6).encode(
+        y=yenc,
+        x=alt.X("Ersparnis:Q", axis=_chf_axis("Ersparnis CHF"),
+                scale=alt.Scale(domain=[lo - pad, hi + pad], nice=False)),
+        color=alt.condition(alt.datum.Ersparnis >= 0,
+                            alt.value(GREEN), alt.value(ROT)),
     )
-    labels = bars.mark_text(align="left", dx=6, font=_FONT, color=ANTHRAZIT,
-                            fontSize=12).encode(text=alt.Text("lbl:N"))
-    return _base(bars + labels, height=200)
+    # Labels outside the bar end: right for positive, left for negative.
+    txt = dict(font=_FONT, fontSize=12, color=ANTHRAZIT, clip=False)
+    pos = base.transform_filter(alt.datum.Ersparnis >= 0).mark_text(
+        align="left", dx=6, **txt).encode(y=yenc, x="Ersparnis:Q", text="lbl:N")
+    neg = base.transform_filter(alt.datum.Ersparnis < 0).mark_text(
+        align="right", dx=-6, **txt).encode(y=yenc, x="Ersparnis:Q", text="lbl:N")
+    return _base(bars + pos + neg, height=210)
 
 
 def chart_dcc_compare(wl_cb: float, sp_cb: float) -> alt.Chart:
     df = pd.DataFrame({"Anbieter": ["Worldline", "SwiPay"], "Cashback": [wl_cb, sp_cb]})
     df["lbl"] = df["Cashback"].map(lambda v: chf(v, 0))
+    hi = max(0.0, wl_cb, sp_cb)
     bars = (
-        alt.Chart(df).mark_bar(size=70, cornerRadiusEnd=6)
+        alt.Chart(df).mark_bar(size=56, cornerRadiusEnd=6)
         .encode(
-            x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"]),
-            y=alt.Y("Cashback:Q", axis=_chf_axis("DCC-Cashback CHF")),
+            x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"],
+                    scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5)),
+            y=alt.Y("Cashback:Q", axis=_chf_axis("DCC-Cashback CHF"),
+                    scale=alt.Scale(domain=[0, hi * 1.18 or 1.0], nice=False)),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
                 domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, CYAN]), legend=None),
         )
     )
-    labels = bars.mark_text(dy=-10, font=_FONT, fontWeight="bold",
+    labels = bars.mark_text(dy=-10, clip=False, font=_FONT, fontWeight="bold",
                             color=ANTHRAZIT, fontSize=13).encode(
         text=alt.Text("lbl:N"))
     return _base(bars + labels)
@@ -289,14 +304,16 @@ def chart_dcc_potential(used: float, fx_total: float) -> alt.Chart:
     bar = (
         alt.Chart(df).mark_bar(height=46, cornerRadius=4)
         .encode(
-            x=alt.X("Volumen:Q", axis=_chf_axis("Fremdwährungsvolumen CHF"), stack="zero"),
+            x=alt.X("Volumen:Q", stack="zero", axis=alt.Axis(
+                title="Fremdwährungsvolumen CHF", tickCount=4,
+                labelExpr="format(datum.value / 1000000, '.0f') + ' Mio.'")),
             color=alt.Color("Segment:N", scale=alt.Scale(
                 domain=["Genutzt (DCC)", "Potenzial (übrig)"], range=[CYAN, "#d9d2c9"]),
-                legend=alt.Legend(orient="bottom", title=None)),
+                legend=alt.Legend(orient="bottom", title=None, labelLimit=200)),
             order=alt.Order("order:Q"),
         )
     )
-    return _base(bar, height=130)
+    return _base(bar, height=170)
 
 
 def chart_monthly(df: pd.DataFrame) -> alt.Chart:
