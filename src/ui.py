@@ -197,6 +197,13 @@ def info_banner(html: str) -> None:
 
 _FONT = "Saira, sans-serif"
 
+# d3-format renders English comma thousands; swap to the Swiss apostrophe.
+_SWISS_INT = "replace(format(datum.value, ',.0f'), /,/g, \"'\")"
+
+
+def _chf_axis(title: str | None) -> alt.Axis:
+    return alt.Axis(title=title, labelExpr=_SWISS_INT)
+
 
 def _base(ch: alt.Chart, height: int = 240) -> alt.Chart:
     return (
@@ -219,51 +226,55 @@ def chart_fees_compare(wl_net: float, sp_net: float) -> alt.Chart:
         "Anbieter": ["Worldline", "SwiPay"],
         "Gebühren": [wl_net, sp_net],
     })
+    df["lbl"] = df["Gebühren"].map(lambda v: chf(v, 0))
     bars = (
         alt.Chart(df).mark_bar(size=70, cornerRadiusEnd=6)
         .encode(
             x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"]),
-            y=alt.Y("Gebühren:Q", title="Netto-Gebühren CHF"),
+            y=alt.Y("Gebühren:Q", axis=_chf_axis("Netto-Gebühren CHF")),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
                 domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, ROT]), legend=None),
         )
     )
     labels = bars.mark_text(dy=-10, font=_FONT, fontWeight="bold",
                             color=ANTHRAZIT, fontSize=13).encode(
-        text=alt.Text("Gebühren:Q", format=",.0f"))
+        text=alt.Text("lbl:N"))
     return _base(bars + labels)
 
 
 def chart_savings_by_type(df: pd.DataFrame) -> alt.Chart:
     """df columns: Typ, Ersparnis (wl_net - sp_net per brand type)."""
+    df = df.copy()
+    df["lbl"] = df["Ersparnis"].map(lambda v: chf(v, 0))
     bars = (
         alt.Chart(df).mark_bar(size=44, cornerRadiusEnd=6)
         .encode(
             y=alt.Y("Typ:N", title=None, sort="-x"),
-            x=alt.X("Ersparnis:Q", title="Ersparnis CHF"),
+            x=alt.X("Ersparnis:Q", axis=_chf_axis("Ersparnis CHF")),
             color=alt.condition(alt.datum.Ersparnis >= 0,
                                 alt.value(GREEN), alt.value(ROT)),
         )
     )
     labels = bars.mark_text(align="left", dx=6, font=_FONT, color=ANTHRAZIT,
-                            fontSize=12).encode(text=alt.Text("Ersparnis:Q", format=",.0f"))
+                            fontSize=12).encode(text=alt.Text("lbl:N"))
     return _base(bars + labels, height=200)
 
 
 def chart_dcc_compare(wl_cb: float, sp_cb: float) -> alt.Chart:
     df = pd.DataFrame({"Anbieter": ["Worldline", "SwiPay"], "Cashback": [wl_cb, sp_cb]})
+    df["lbl"] = df["Cashback"].map(lambda v: chf(v, 0))
     bars = (
         alt.Chart(df).mark_bar(size=70, cornerRadiusEnd=6)
         .encode(
             x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"]),
-            y=alt.Y("Cashback:Q", title="DCC-Cashback CHF"),
+            y=alt.Y("Cashback:Q", axis=_chf_axis("DCC-Cashback CHF")),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
                 domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, CYAN]), legend=None),
         )
     )
     labels = bars.mark_text(dy=-10, font=_FONT, fontWeight="bold",
                             color=ANTHRAZIT, fontSize=13).encode(
-        text=alt.Text("Cashback:Q", format=",.0f"))
+        text=alt.Text("lbl:N"))
     return _base(bars + labels)
 
 
@@ -278,7 +289,7 @@ def chart_dcc_potential(used: float, fx_total: float) -> alt.Chart:
     bar = (
         alt.Chart(df).mark_bar(height=46, cornerRadius=4)
         .encode(
-            x=alt.X("Volumen:Q", title="Fremdwährungsvolumen CHF", stack="zero"),
+            x=alt.X("Volumen:Q", axis=_chf_axis("Fremdwährungsvolumen CHF"), stack="zero"),
             color=alt.Color("Segment:N", scale=alt.Scale(
                 domain=["Genutzt (DCC)", "Potenzial (übrig)"], range=[CYAN, "#d9d2c9"]),
                 legend=alt.Legend(orient="bottom", title=None)),
@@ -296,7 +307,7 @@ def chart_monthly(df: pd.DataFrame) -> alt.Chart:
         alt.Chart(long).mark_line(point=True, strokeWidth=3)
         .encode(
             x=alt.X("Monat:N", title=None),
-            y=alt.Y("Gebühren:Q", title="Gebühren CHF"),
+            y=alt.Y("Gebühren:Q", axis=_chf_axis("Gebühren CHF")),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
                 domain=["WL", "SP"], range=[ANTHRAZIT, ROT]),
                 legend=alt.Legend(orient="top", title=None)),
@@ -311,7 +322,7 @@ def chart_volume_monthly(df: pd.DataFrame) -> alt.Chart:
         alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=BLUE, opacity=0.85)
         .encode(
             x=alt.X("Monat:N", title=None),
-            y=alt.Y("Umsatz:Q", title="Umsatz CHF"),
+            y=alt.Y("Umsatz:Q", axis=_chf_axis("Umsatz CHF")),
         )
     )
     return _base(bars, height=200)
@@ -323,7 +334,7 @@ def chart_hist(df: pd.DataFrame) -> alt.Chart:
         alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=CYAN)
         .encode(
             x=alt.X("Bucket:N", title="Transaktionsgrösse CHF", sort=None),
-            y=alt.Y("Anzahl:Q", title="Anzahl"),
+            y=alt.Y("Anzahl:Q", axis=_chf_axis("Anzahl")),
         )
     )
     return _base(bars, height=220)
@@ -335,7 +346,7 @@ def chart_region(df: pd.DataFrame) -> alt.Chart:
         alt.Chart(df).mark_bar(cornerRadiusEnd=4)
         .encode(
             y=alt.Y("Region:N", title=None, sort="-x"),
-            x=alt.X("Umsatz:Q", title="Umsatz CHF"),
+            x=alt.X("Umsatz:Q", axis=_chf_axis("Umsatz CHF")),
             color=alt.condition(alt.datum.Region == "DOMESTIC",
                                 alt.value(ANTHRAZIT), alt.value(CYAN)),
         )

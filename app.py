@@ -61,12 +61,6 @@ if "master" not in st.session_state:
     st.session_state.master = load_brand_master()
 if "profile" not in st.session_state:
     st.session_state.profile = default_rate_profile()
-    p0 = st.session_state.profile
-    for _t in OFFERABLE_TYPES:
-        st.session_state[f"asf_{_t}"] = round(p0.type_rates[_t].asf_pct * 100, 4)
-        st.session_state[f"trx_{_t}"] = round(p0.type_rates[_t].trx_fee * 100, 4)
-        st.session_state[f"mf_{_t}"]  = round(p0.type_rates[_t].min_fee, 2)
-    st.session_state["dcc_in"] = round(p0.dcc_pct * 100, 2)
 
 master: BrandMaster = st.session_state.master
 profile: RateProfile = st.session_state.profile
@@ -653,6 +647,15 @@ def page_einstellungen() -> None:
         ui.section("Konditionen", "ASF · Trx-Fee · Mindestgebühr · DCC")
         st.caption("ASF-Sätze sind Platzhalter (bewusst hoch). Vor jedem Kundenlauf das "
                    "echte SwiPay-Preisblatt eintragen.")
+        # Seed the widget keys from the durable profile in the SAME run the
+        # widgets render (setdefault preserves edits; avoids the cross-run
+        # cleanup that would otherwise reset them to 0).
+        for _t in OFFERABLE_TYPES:
+            st.session_state.setdefault(f"asf_{_t}", round(profile.type_rates[_t].asf_pct * 100, 4))
+            st.session_state.setdefault(f"trx_{_t}", round(profile.type_rates[_t].trx_fee * 100, 4))
+            st.session_state.setdefault(f"mf_{_t}",  round(profile.type_rates[_t].min_fee, 2))
+        st.session_state.setdefault("dcc_in", round(profile.dcc_pct * 100, 2))
+
         new_mode = st.radio("Eingabemodus", ["schnell", "experte"],
             format_func=lambda m: "Schnellmodus" if m == "schnell"
             else "Expertenmodus (pro Brand)", horizontal=True,
