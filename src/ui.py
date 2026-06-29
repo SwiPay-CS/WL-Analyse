@@ -58,14 +58,21 @@ def chf_compact(v: float) -> str:
 # ── Logo ───────────────────────────────────────────────────────────────────────
 
 def _logo_data_uri() -> str | None:
-    """Return a data: URI for the official logo if a file is present in assets/."""
-    for name in ("swipay-logo.svg", "logo.svg", "swipay-logo.png", "logo.png"):
-        p = _ASSETS / name
-        if p.exists():
-            mime = "image/svg+xml" if p.suffix == ".svg" else "image/png"
-            b64 = base64.b64encode(p.read_bytes()).decode()
-            return f"data:{mime};base64,{b64}"
-    return None
+    """Return a data: URI for the official logo if present in assets/.
+
+    Case-insensitive; matches any *.svg/*.png whose name contains "logo"
+    (e.g. SWIPAY-Logo.svg). SVG is preferred over PNG.
+    """
+    if not _ASSETS.exists():
+        return None
+    cands = [p for p in _ASSETS.iterdir()
+             if p.suffix.lower() in (".svg", ".png") and "logo" in p.stem.lower()]
+    cands.sort(key=lambda p: (p.suffix.lower() != ".svg", p.name.lower()))
+    if not cands:
+        return None
+    p = cands[0]
+    mime = "image/svg+xml" if p.suffix.lower() == ".svg" else "image/png"
+    return f"data:{mime};base64,{base64.b64encode(p.read_bytes()).decode()}"
 
 
 def _hexagon_mark(size: int = 34) -> str:
@@ -85,21 +92,25 @@ def sidebar_brand() -> None:
     """Render the SwiPay lockup at the top of the sidebar (logo file or hexagon)."""
     uri = _logo_data_uri()
     if uri:
-        mark = f'<img src="{uri}" alt="SwiPay" style="height:38px;width:auto"/>'
+        # Official lockup already includes wordmark + claim — show it alone.
+        st.markdown(
+            f'<div class="sp-brand sp-brand-logo">'
+            f'<img src="{uri}" alt="SwiPay – das Bezahlnetzwerk"/></div>',
+            unsafe_allow_html=True,
+        )
     else:
-        mark = _hexagon_mark()
-    st.markdown(
-        f"""
-        <div class="sp-brand">
-          {mark}
-          <div class="sp-brand-txt">
-            <div class="sp-wordmark">SwiPay</div>
-            <div class="sp-claim">DAS BEZAHLNETZWERK</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            f"""
+            <div class="sp-brand">
+              {_hexagon_mark()}
+              <div class="sp-brand-txt">
+                <div class="sp-wordmark">SwiPay</div>
+                <div class="sp-claim">DAS BEZAHLNETZWERK</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # ── Header / page title ─────────────────────────────────────────────────────────
@@ -362,6 +373,8 @@ def inject_css() -> None:
     section[data-testid="stSidebar"] .block-container {{ padding-top:1.1rem; }}
     .sp-brand {{ display:flex; align-items:center; gap:.7rem; padding:.2rem .2rem 1rem;
       border-bottom:1px solid var(--line); margin-bottom:1rem; }}
+    .sp-brand-logo {{ padding:.4rem .2rem 1.1rem; }}
+    .sp-brand-logo img {{ width:100%; max-width:188px; height:auto; }}
     .sp-wordmark {{ font-size:1.5rem; font-weight:800; color:var(--anthrazit);
       line-height:1; letter-spacing:-.02em; }}
     .sp-claim {{ font-size:.6rem; font-weight:600; letter-spacing:.18em;
