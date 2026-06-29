@@ -1,90 +1,119 @@
 {
   "version": 1,
-  "_comment": "Brand master list. Git-versioned, general-purpose. ASF rates live in rate profiles, NOT here. type: debit | credit | credit2 | spezial. Spezial brands are never offerable (SwiPay mirrors Worldline 1:1).",
   "brands": [
-    {
-      "display_name": "Visa Debit",
-      "type": "debit",
-      "offerable": true,
-      "order": 10,
-      "search_codes": ["VisaDebit", "DebitVisa", "Visa Debit"]
-    },
-    {
-      "display_name": "Debit Mastercard",
-      "type": "debit",
-      "offerable": true,
-      "order": 20,
-      "search_codes": ["Debit Mastercard", "DebitMasterCard", "Debit MasterCard"]
-    },
-    {
-      "display_name": "Maestro",
-      "type": "debit",
-      "offerable": true,
-      "order": 30,
-      "search_codes": ["Maestro"]
-    },
-    {
-      "display_name": "Maestro-CH",
-      "type": "debit",
-      "offerable": true,
-      "order": 40,
-      "search_codes": ["Maestro-CH", "Maestro CH"]
-    },
-    {
-      "display_name": "V PAY",
-      "type": "debit",
-      "offerable": true,
-      "order": 50,
-      "search_codes": ["V PAY", "VPAY", "V-PAY"]
-    },
     {
       "display_name": "Mastercard",
       "type": "credit",
       "offerable": true,
-      "order": 60,
-      "search_codes": ["Mastercard", "MasterCard"]
+      "order": 10,
+      "search_codes": [
+        "Mastercard",
+        "MasterCard"
+      ]
     },
     {
       "display_name": "Visa",
       "type": "credit",
       "offerable": true,
-      "order": 70,
-      "search_codes": ["Visa"]
+      "order": 20,
+      "search_codes": [
+        "Visa"
+      ]
+    },
+    {
+      "display_name": "Debit Mastercard",
+      "type": "debit",
+      "offerable": true,
+      "order": 30,
+      "search_codes": [
+        "Debit Mastercard",
+        "DebitMasterCard",
+        "Debit MasterCard"
+      ]
+    },
+    {
+      "display_name": "Visa Debit",
+      "type": "debit",
+      "offerable": true,
+      "order": 40,
+      "search_codes": [
+        "VisaDebit",
+        "DebitVisa",
+        "Visa Debit"
+      ]
+    },
+    {
+      "display_name": "Maestro-CH",
+      "type": "debit",
+      "offerable": true,
+      "order": 50,
+      "search_codes": [
+        "Maestro-CH",
+        "Maestro CH",
+        "Maestro"
+      ]
+    },
+    {
+      "display_name": "V PAY",
+      "type": "debit",
+      "offerable": true,
+      "order": 60,
+      "search_codes": [
+        "V PAY",
+        "VPAY",
+        "V-PAY"
+      ]
     },
     {
       "display_name": "Diners/Discover",
       "type": "credit2",
       "offerable": true,
       "order": 80,
-      "search_codes": ["Diners/Discover", "Diners", "Discover"]
+      "search_codes": [
+        "Diners/Discover",
+        "Diners",
+        "Discover"
+      ]
     },
     {
       "display_name": "JCB",
       "type": "credit2",
       "offerable": true,
       "order": 90,
-      "search_codes": ["JCB"]
+      "search_codes": [
+        "JCB"
+      ]
     },
     {
       "display_name": "Union Pay",
       "type": "credit2",
       "offerable": true,
       "order": 100,
-      "search_codes": ["Union Pay", "UnionPay", "China Union Pay"]
+      "search_codes": [
+        "Union Pay",
+        "UnionPay",
+        "China Union Pay"
+      ]
     },
     {
       "display_name": "TWINT",
       "type": "spezial",
       "offerable": false,
       "order": 200,
-      "search_codes": ["TWINT"]
+      "search_codes": [
+        "TWINT"
+      ]
     },
     {
       "display_name": "WeChat Pay",
       "type": "spezial",
       "offerable": false,
       "order": 210,
-      "search_codes": ["WeChat Pay", "WeChat", "WeChatPay"]
+      "search_codes": [
+        "WeChat Pay",
+        "WeChat",
+        "WeChatPay"
+      ]
     }
   ]
 }
