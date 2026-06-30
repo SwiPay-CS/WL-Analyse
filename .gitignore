@@ -28,3 +28,7 @@ output/
 
 # Local Claude Code permissions (machine-specific state, not project content)
 .claude/settings.local.json
+
+# graphify machine-specific state and regenerable cache (keep committed artifacts only)
+graphify-out/.graphify_*
+graphify-out/cache/
