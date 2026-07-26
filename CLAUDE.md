@@ -10,8 +10,13 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 
 ## Stack & Start
 - macOS, uv, Python 3.13, pandas, pyxlsb, Streamlit, fpdf2, pytest
-- Start: uv run streamlit run app.py  (öffnet http://localhost:8501)
+- Projektpfad: /Users/schellmo/Dokumente/Claude/Analysen/Prototyp
+  (früher unter ~/Documents/Claude/…; Documents wurde auf «Dokumente» lokalisiert)
+- Start: cd "/Users/schellmo/Dokumente/Claude/Analysen/Prototyp" && uv run streamlit run app.py
+  (öffnet http://localhost:8501; nur EINE Instanz, nie eine zweite auf anderem Port)
 - Tests: uv run pytest
+- Nach einem Ordner-Umzug ist die .venv verbogen (hartkodierte Pfade → «Failed to
+  spawn: streamlit»). Fix: rm -rf .venv && uv sync.
 - Kundendaten liegen in data/ und sind gitignored. Nie committen.
 
 ## Arbeitsweise
