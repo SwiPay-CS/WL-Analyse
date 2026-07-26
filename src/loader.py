@@ -6,6 +6,8 @@ Idempotenz-Schluessel und Fan-out-Erkennung.
 
 from __future__ import annotations
 import hashlib
+from pathlib import Path
+
 import pandas as pd
 
 # Normalisiertes Schema, das pipeline.run_comparison() erwartet.
@@ -67,6 +69,22 @@ def load_worldline(path: str, sheet: str | None = None) -> pd.DataFrame:
         raw = pd.read_csv(path, sep=";", encoding="utf-8-sig", decimal=".")
 
     df = raw.rename(columns=COLUMN_MAP)
+
+    # Datenvertrag pruefen, BEVOR mit dem DataFrame weitergearbeitet wird.
+    # Ohne diesen Check wuerden fehlende Spalten (z.B. andere Export-Variante
+    # ohne ICF/CSF-Aufschluesselung) still in `keep` unten verschwinden und
+    # erst viel spaeter in pipeline.run_comparison() als rohen KeyError
+    # auffallen, weit weg von der eigentlichen Ursache.
+    required = [c for c in NORMALIZED_COLUMNS if c not in ("is_dcc", "is_refund")]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"«{Path(path).name}» hat nach dem Spalten-Mapping keine Spalte(n) "
+            f"{', '.join(missing)}. Vermutlich ein anderes Export-Format "
+            "(z.B. ohne Scheme Fee/Interchange-Aufschluesselung) — fuer den "
+            "Vergleich wird der vollstaendige Worldline-Export benoetigt."
+        )
+
     for c in NUMERIC:
         if c in df:
             df[c] = pd.to_numeric(df[c], errors="coerce")
