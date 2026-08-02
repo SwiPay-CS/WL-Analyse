@@ -94,6 +94,11 @@ class ProjectionResult:
     # Mix plausibility hints (Tier A only; empty for Tier B)
     mix_hints: list[str] = field(default_factory=list)
 
+    # Transaction count (all rows, incl. refunds), scaled the same way as the
+    # CHF metrics above.
+    n_txn_observed: int = 0
+    n_txn_annual: float = 0.0
+
 
 # ---------------------------------------------------------------------------
 # Tier B
@@ -129,6 +134,7 @@ def project_tier_b(
     saving = wl_net - sp_net
     wl_dcc = t["wl_cashback"] * scale
     sp_dcc = t["sp_cashback"] * scale
+    n_txn_obs = len(df)
 
     coverage = CoverageTier.classify(obs_vol, annual_volume)
 
@@ -145,6 +151,8 @@ def project_tier_b(
         dcc_advantage_annual=sp_dcc - wl_dcc,
         band_low=saving  * (1 - _BAND_PCT),
         band_high=saving * (1 + _BAND_PCT),
+        n_txn_observed=n_txn_obs,
+        n_txn_annual=n_txn_obs * scale,
     )
 
 
@@ -177,6 +185,8 @@ def project_tier_a(
     wl_net_total = sp_net_total = 0.0
     wl_dcc_total = sp_dcc_total = 0.0
     total_obs_vol = total_ann_vol = 0.0
+    n_txn_obs_total = 0
+    n_txn_total = 0.0
     mix_hints: list[str] = []
 
     seen_brands: list[str] = list(dict.fromkeys(df["brand"].tolist()))
@@ -186,6 +196,8 @@ def project_tier_a(
         purch  = b & ~refund
         obs_vol = float(np.nansum(brutto[purch])) if purch.any() else 0.0
         ann_vol = annual_by_brand.get(brand, obs_vol)
+        n_b = int(b.sum())
+        n_txn_obs_total += n_b
 
         if brand not in annual_by_brand:
             mix_hints.append(
@@ -199,6 +211,7 @@ def project_tier_a(
             mix_hints.append(
                 f"{brand}: zero observed purchase volume — cannot project"
             )
+            n_txn_total += n_b  # scale undefined here; keep the raw count
             continue
 
         scale = ann_vol / obs_vol
@@ -206,6 +219,7 @@ def project_tier_a(
         sp_net_total += float(sp_net_v[b].sum()) * scale
         wl_dcc_total += float(wl_cb_v[b].sum()) * scale
         sp_dcc_total += float(sp_cb_v[b].sum()) * scale
+        n_txn_total  += n_b * scale
 
     # Mix plausibility: compare share of brands that have annual data.
     total_ann_prov = sum(annual_by_brand.values()) or 1.0
@@ -239,4 +253,6 @@ def project_tier_a(
         band_low=saving  * (1 - _BAND_PCT),
         band_high=saving * (1 + _BAND_PCT),
         mix_hints=mix_hints,
+        n_txn_observed=n_txn_obs_total,
+        n_txn_annual=n_txn_total,
     )

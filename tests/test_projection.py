@@ -140,6 +140,16 @@ def test_tier_b_indicative_label_at_low_coverage():
     assert result.tier              == "B"
 
 
+def test_tier_b_scales_transaction_count_by_the_same_factor():
+    """n_txn_annual must scale by the same factor as the CHF metrics (Tier B:
+    observed mix preserved, one lump-sum scale for everything)."""
+    df = _sample_df()  # 4 rows, purchase volume 135.0
+    result = project_tier_b(df, PARAMS, OFFER, DCC_RATE, annual_volume=270.0)
+
+    assert result.n_txn_observed == 4
+    assert result.n_txn_annual   == pytest.approx(8.0)  # scale = 270/135 = 2
+
+
 # ---------------------------------------------------------------------------
 # Test 3: DCC advantage is positive when SwiPay rate exceeds Worldline rate
 # ---------------------------------------------------------------------------

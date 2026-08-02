@@ -43,6 +43,13 @@ def chf(v: float, dec: int = 2) -> str:
 def num(v: float) -> str:
     return f"{int(round(v)):,}".replace(",", "'")
 
+def pid(v) -> str:
+    """Clean Partner-ID for display: pandas float-casts whole-number IDs
+    (e.g. NaN-safe astype(str) on a numeric column), leaving a trailing
+    '.0' that isn't a real decimal. Strip it; leave any other value as-is."""
+    s = str(v).strip()
+    return s[:-2] if s.endswith(".0") else s
+
 def pct(v: float, dec: int = 2) -> str:
     return f"{v * 100:.{dec}f} %"
 
@@ -492,7 +499,36 @@ def inject_css() -> None:
       border-radius:10px; font-weight:700; }}
     .stButton button[kind="primary"]:hover {{ background:var(--dunkelrot); }}
     div[data-testid="stDataFrame"] {{ border:1px solid var(--line); border-radius:12px; }}
-    .stTabs [data-baseweb="tab-list"] {{ gap:.3rem; }}
-    .stTabs [aria-selected="true"] {{ color:var(--rot); }}
+
+    /* ── Tabs styled as a button row; last tab pinned right + red (Reset) ── */
+    .stTabs [data-baseweb="tab-list"] {{ gap:.4rem; border-bottom:1px solid var(--line);
+      padding-bottom:.6rem; }}
+    .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{
+      display:none; }}
+    .stTabs [data-baseweb="tab"] {{ height:auto; background:{WHITE};
+      border:1px solid var(--line); border-radius:10px; padding:.55rem 1.1rem;
+      font-weight:700; font-size:.92rem; color:var(--anthrazit); transition:background .15s; }}
+    .stTabs [data-baseweb="tab"]:hover {{ background:#f4f2ef; }}
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+      background:rgba(60,143,153,.12); color:var(--blue); border-color:rgba(60,143,153,.25); }}
+    /* :last-of-type, not :last-child — baseweb appends a hidden tab-highlight
+       <div> after the last <button>, which would otherwise win :last-child.
+       Scoped to .st-key-settings_tabs so it hits only the Einstellungen top
+       tabs (Reset), not every nested st.tabs() elsewhere on the page. */
+    .st-key-settings_tabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type {{
+      margin-left:auto; background:var(--rot); color:{WHITE}; border-color:var(--rot); }}
+    .st-key-settings_tabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type:hover {{
+      background:var(--dunkelrot); }}
+    .st-key-settings_tabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type[aria-selected="true"] {{
+      color:{WHITE}; }}
+    /* Undo the red/pinned rule for the nested Merchants sub-tabs (Gruppieren /
+       Hochrechnung) — they inherit the .st-key-settings_tabs ancestor match
+       but "Hochrechnung" is not a reset action. */
+    .st-key-merchant_subtabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type {{
+      margin-left:0; background:{WHITE}; color:var(--anthrazit); border-color:var(--line); }}
+    .st-key-merchant_subtabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type:hover {{
+      background:#f4f2ef; }}
+    .st-key-merchant_subtabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type[aria-selected="true"] {{
+      background:rgba(60,143,153,.12); color:var(--blue); }}
     </style>
     """, unsafe_allow_html=True)

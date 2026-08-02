@@ -2,8 +2,9 @@
 SwiPay Worldline-Vergleichstool — Streamlit-Oberfläche im SwiPay-CI.
 Start: uv run streamlit run app.py
 
-Navigierte App: Präsentation (Kundentermin), Transaktionen, Partner & Gruppen,
-Einstellungen (Upload · Mapping · ASF). Design-System in src/ui.py.
+Navigierte App: Präsentation (Kundentermin), Transaktionen, Merchants,
+Einstellungen (Import · Mapping · ASF · Merchants · Reset). Design-System in
+src/ui.py.
 """
 
 from __future__ import annotations
@@ -170,7 +171,7 @@ params, offer = build_param_table(master, profile, mode=profile.mode)
 # ── SIDEBAR ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     ui.sidebar_brand()
-    NAV = ["📊  Präsentation", "⇄  Transaktionen", "👥  Partner & Gruppen", "⚙  Einstellungen"]
+    NAV = ["📊  Präsentation", "⇄  Transaktionen", "👥  Merchants", "⚙  Einstellungen"]
     _CLEAN = {n: n.split("  ", 1)[1] for n in NAV}
     sel = st.radio("Navigation", NAV,
                    index=[_CLEAN[n] for n in NAV].index(st.session_state.nav),
@@ -210,7 +211,7 @@ def page_praesentation() -> None:
     label = "Alle Partner"
     with c2:
         if scope == "Partner" and pid_col:
-            opts = sorted(df[pid_col].dropna().astype(str).unique().tolist())
+            opts = sorted(df[pid_col].dropna().astype(str).map(ui.pid).unique().tolist())
             sel_pids = st.multiselect("Partner-ID", opts, default=opts[:1] or opts,
                                       label_visibility="collapsed",
                                       placeholder="Partner-ID wählen")
@@ -218,10 +219,10 @@ def page_praesentation() -> None:
         elif scope == "Gruppe" and groups:
             gname = st.selectbox("Gruppe", list(groups.keys()),
                                  label_visibility="collapsed")
-            sel_pids = groups.get(gname, [])
+            sel_pids = [ui.pid(p) for p in groups.get(gname, [])]
             label = f"Gruppe «{gname}»"
         elif scope == "Gruppe":
-            st.caption("Noch keine Gruppen — unter «Partner & Gruppen» anlegen.")
+            st.caption("Noch keine Gruppen — unter «Einstellungen → Merchants» anlegen.")
     with c3:
         annual_vol = st.number_input("Jahresumsatz CHF", min_value=0.0, value=0.0,
                                      step=10000.0, format="%.0f",
@@ -236,7 +237,7 @@ def page_praesentation() -> None:
     # Filter
     mask = pd.Series(True, index=df.index)
     if sel_pids is not None and pid_col:
-        mask &= df[pid_col].astype(str).isin(sel_pids)
+        mask &= df[pid_col].astype(str).map(ui.pid).isin(sel_pids)
     mask &= _apply_period(df, frm, to)
     fdf = df[mask].reset_index(drop=True)
 
@@ -467,92 +468,231 @@ def page_transaktionen() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE: PARTNER & GRUPPEN
+# PAGE: MERCHANTS  (read-only; Gruppieren + Hochrechnung live in Einstellungen)
 # ════════════════════════════════════════════════════════════════════════════
 _MONEY = ["Umsatz", "Ø Ticket", "WL-Geb.", "SP-Geb.", "Diff.", "DCC-Vtl."]
+_MERCH_COLS   = ["Name", "Partner-ID", "Umsatz", "Ø Ticket", "Txn",
+                 "WL-Geb.", "SP-Geb.", "Diff.", "DCC-Vtl."]
+_MERCH_WIDTHS = [2.4, 1.3, 1.2, 1.0, 0.8, 1.1, 1.1, 1.0, 1.0]
 
 
-def page_partner() -> None:
-    ui.page_header("Partner & Gruppen", "Einzelne Partner vergleichen und bündeln.",
+def _agg_merchant(sub: pd.DataFrame) -> dict:
+    """One merchant's (or one group's) aggregate row. `sub` must already carry
+    wl_net/sp_net/wl_cb/sp_cb (see _with_comparison)."""
+    pu = sub[~sub["is_refund"]]
+    n = len(pu)
+    return {
+        "Name": str(sub["partner_name"].iloc[0]) if "partner_name" in sub and n else "",
+        "Umsatz": round(float(pu["brutto"].sum()), 2), "Txn": len(sub),
+        "Ø Ticket": round(float(pu["brutto"].mean()), 2) if n else 0.0,
+        "WL-Geb.": round(float(sub["wl_net"].sum()), 2),
+        "SP-Geb.": round(float(sub["sp_net"].sum()), 2),
+        "Diff.": round(float(sub["wl_net"].sum() - sub["sp_net"].sum()), 2),
+        "DCC-Vtl.": round(float(sub["sp_cb"].sum() - sub["wl_cb"].sum()), 2),
+    }
+
+
+def _with_comparison(df_subset: pd.DataFrame) -> pd.DataFrame:
+    comp = run_comparison(df_subset, params, offer, profile.dcc_pct)
+    out = df_subset.copy()
+    out["wl_net"], out["sp_net"] = comp["wl_net"].values, comp["sp_net"].values
+    out["wl_cb"], out["sp_cb"] = comp["wl_cashback"].values, comp["sp_cashback"].values
+    return out
+
+
+def _merchant_rows(base_df: pd.DataFrame, pid_col: str,
+                   groups: dict[str, list[str]]) -> list[dict]:
+    """One row per group + one row per ungrouped merchant, sorted by Name.
+
+    Group rows carry a 'members' list (each an _agg_merchant() dict + 'pid' +
+    '_df'); 'pid_display' is None for groups (renders as a +/- toggle) and the
+    cleaned Partner-ID for singles. Every row keeps '_df' — the raw (pre-
+    comparison) transaction slice — so Hochrechnung can run project_tier_b on
+    it directly."""
+    pid_clean = base_df[pid_col].astype(str).map(ui.pid)
+    m = _with_comparison(base_df)
+    grouped = {ui.pid(p) for pids in groups.values() for p in pids}
+
+    rows: list[dict] = []
+    for gname, raw_pids in groups.items():
+        pids = [ui.pid(p) for p in raw_pids]
+        mask = pid_clean.isin(pids)
+        if not mask.any():
+            continue
+        row = _agg_merchant(m[mask])
+        row["Name"] = gname
+        row["_df"] = base_df[mask]
+        row["pid_display"] = None
+        members = []
+        for pv in pids:
+            pmask = pid_clean == pv
+            if not pmask.any():
+                continue
+            mrow = _agg_merchant(m[pmask])
+            if not mrow["Name"]:
+                mrow["Name"] = pv
+            mrow["pid"] = pv
+            mrow["_df"] = base_df[pmask]
+            members.append(mrow)
+        row["members"] = sorted(members, key=lambda r: r["Name"].lower())
+        rows.append(row)
+
+    for pv in sorted(set(pid_clean) - grouped):
+        pmask = pid_clean == pv
+        row = _agg_merchant(m[pmask])
+        if not row["Name"]:
+            row["Name"] = pv
+        row["_df"] = base_df[pmask]
+        row["pid_display"] = pv
+        row["members"] = []
+        rows.append(row)
+
+    rows.sort(key=lambda r: r["Name"].lower())
+    return rows
+
+
+def _row_key(row: dict) -> str:
+    """Unique, stable key for a merchant/group row (Name alone can collide —
+    several ungrouped merchants may share the same partner_name)."""
+    return f"g_{row['Name']}" if row["pid_display"] is None else f"s_{row['pid_display']}"
+
+
+def _merchant_options(base_df: pd.DataFrame, pid_col: str) -> list[str]:
+    """'<Partner-ID> – <Name>' strings; Streamlit's multiselect filters on
+    this text as the user types, giving search-by-name-or-ID for free."""
+    if pid_col not in base_df.columns:
+        return []
+    cols = [pid_col] + (["partner_name"] if "partner_name" in base_df else [])
+    sub = base_df[cols].dropna(subset=[pid_col]).copy()
+    sub["_pid"] = sub[pid_col].astype(str).map(ui.pid)
+    sub = sub.drop_duplicates("_pid")
+    out = []
+    for _, r in sub.iterrows():
+        name = str(r.get("partner_name", "")).strip()
+        out.append(f"{r['_pid']} – {name}" if name else r["_pid"])
+    return sorted(out, key=str.lower)
+
+
+def _pid_from_option(opt: str) -> str:
+    return opt.split(" – ", 1)[0].strip()
+
+
+def _fmt_row_values(row: dict) -> list[str]:
+    return [chf(row["Umsatz"]), chf(row["Ø Ticket"]), num(row["Txn"]),
+            chf(row["WL-Geb."]), chf(row["SP-Geb."]), chf(row["Diff."]),
+            chf(row["DCC-Vtl."])]
+
+
+def _merchant_table_header() -> None:
+    cols = st.columns(_MERCH_WIDTHS)
+    for c, label in zip(cols, _MERCH_COLS):
+        c.markdown(f"**{label}**")
+
+
+def _project_row(df_subset: pd.DataFrame, annual_vol: float):
+    """Tier-B projection for one merchant's/group's raw transaction slice.
+    None if there's nothing to project (no volume, no purchases)."""
+    if annual_vol <= 0 or df_subset.empty:
+        return None
+    try:
+        return project_tier_b(df_subset, params, offer, profile.dcc_pct,
+                              annual_volume=annual_vol)
+    except ValueError:
+        return None
+
+
+def _render_projection(proj) -> None:
+    cov = proj.coverage
+    cov_txt = {CoverageLabel.SIMULATABLE: "hohe Deckung",
+               CoverageLabel.LOW_COVERAGE: "mittlere Deckung",
+               CoverageLabel.INDICATIVE: "indikativ"}[cov.label]
+    ui.kpi_row([
+        {"label": "Diff. p.a.", "value": f"CHF {chf(proj.saving_annual, 0)}",
+         "foot": f"Band {chf(proj.band_low, 0)} – {chf(proj.band_high, 0)}",
+         "accent": ui.GREEN if proj.saving_annual >= 0 else ui.ROT},
+        {"label": "Transaktionen p.a.", "value": num(proj.n_txn_annual), "accent": ui.CYAN},
+        {"label": "DCC-Vorteil p.a.", "value": f"CHF {chf(proj.dcc_advantage_annual)}",
+         "accent": ui.CYAN},
+        {"label": "Deckungsgrad", "value": f"{cov.coverage_pct:.0%}", "foot": cov_txt,
+         "accent": ui.BLUE},
+    ])
+
+
+def _render_group_member_projection(row: dict, member_vols: dict[str, float]) -> None:
+    """Sum a Tier-B projection per member that has its own Jahresumsatz;
+    members without one keep their raw actuals (scale = 1). Per-member input
+    takes precedence over a single group-level Jahresumsatz."""
+    wl = sp = dcc_adv = txn = 0.0
+    used, skipped = [], []
+    for mrow in row["members"]:
+        av = member_vols.get(mrow["pid"], 0.0)
+        proj = _project_row(mrow["_df"], av) if av > 0 else None
+        label = f"{mrow['Name']} ({mrow['pid']})"
+        if proj:
+            wl += proj.wl_net_annual; sp += proj.sp_net_annual
+            dcc_adv += proj.dcc_advantage_annual; txn += proj.n_txn_annual
+            used.append(label)
+        else:
+            wl += mrow["WL-Geb."]; sp += mrow["SP-Geb."]
+            dcc_adv += mrow["DCC-Vtl."]; txn += mrow["Txn"]
+            skipped.append(label)
+    diff = wl - sp
+    ui.kpi_row([
+        {"label": "Diff. p.a. (Summe)", "value": f"CHF {chf(diff, 0)}",
+         "accent": ui.GREEN if diff >= 0 else ui.ROT},
+        {"label": "Transaktionen p.a.", "value": num(txn), "accent": ui.CYAN},
+        {"label": "DCC-Vorteil p.a.", "value": f"CHF {chf(dcc_adv)}", "accent": ui.CYAN},
+    ])
+    st.caption(f"Hochgerechnet: {', '.join(used) if used else '–'}. "
+              f"Ist-Werte übernommen (kein Jahresumsatz): {', '.join(skipped) if skipped else '–'}.")
+
+
+def page_merchants() -> None:
+    ui.page_header("Merchants", "Alle Händler auf einen Blick — Gruppen aufklappbar.",
                    status="Aktiv", meta="Gruppierung nach Partner-ID")
     pid_col = "partner_id" if "partner_id" in df.columns else None
     if not pid_col:
         ui.info_banner("Keine Partner-ID-Spalte in den Daten.")
         return
 
-    comp = run_comparison(df, params, offer, profile.dcc_pct)
-    m = df.copy()
-    m["wl_net"], m["sp_net"] = comp["wl_net"].values, comp["sp_net"].values
-    m["wl_cb"], m["sp_cb"] = comp["wl_cashback"].values, comp["sp_cashback"].values
-
-    def agg(sub: pd.DataFrame) -> dict:
-        pu = sub[~sub["is_refund"]]
-        n = len(pu)
-        return {
-            "Name": str(sub["partner_name"].iloc[0]) if "partner_name" in sub and n else "",
-            "Umsatz": round(float(pu["brutto"].sum()), 2), "Txn": len(sub),
-            "Ø Ticket": round(float(pu["brutto"].mean()), 2) if n else 0.0,
-            "WL-Geb.": round(float(sub["wl_net"].sum()), 2),
-            "SP-Geb.": round(float(sub["sp_net"].sum()), 2),
-            "Diff.": round(float(sub["wl_net"].sum() - sub["sp_net"].sum()), 2),
-            "DCC-Vtl.": round(float(sub["sp_cb"].sum() - sub["wl_cb"].sum()), 2),
-        }
-
-    def fmt(d_in: pd.DataFrame) -> pd.DataFrame:
-        o = d_in.copy()
-        for c in _MONEY:
-            if c in o:
-                o[c] = o[c].apply(lambda x: chf(float(x)) if pd.notna(x) else "")
-        if "Txn" in o:
-            o["Txn"] = o["Txn"].apply(lambda x: num(int(x)))
-        return o
-
-    ui.section("Einzelansicht")
-    rows = {pid: agg(sub) for pid, sub in m.groupby(pid_col)}
-    edf = pd.DataFrame.from_dict(rows, orient="index"); edf.index.name = "Partner-ID"
-    st.dataframe(fmt(edf), use_container_width=True)
-
     groups = get_groups(DB_PATH)
-    ui.section("Gruppenansicht")
-    grows = {}
-    for g, pids in groups.items():
-        sub = m[m[pid_col].astype(str).isin(pids)]
-        if sub.empty:
-            continue
-        row = agg(sub); row["Partner-IDs"] = ", ".join(pids); grows[g] = row
-    if grows:
-        gdf = pd.DataFrame.from_dict(grows, orient="index")
-        st.dataframe(fmt(gdf[["Partner-IDs"] + _MONEY + ["Txn"]]), use_container_width=True)
-    else:
-        st.caption("Noch keine Gruppen definiert.")
+    rows = _merchant_rows(df, pid_col, groups)
 
-    ui.section("Gruppen verwalten")
-    c1, c2 = st.columns(2)
-    with c1:
-        gname = st.text_input("Gruppenname")
-        all_pids = sorted(df[pid_col].dropna().astype(str).unique().tolist())
-        gpids = st.multiselect("Partner-IDs zuweisen", all_pids)
-        if st.button("Gruppe speichern", type="primary") and gname.strip() and gpids:
-            assign_group(DB_PATH, gname.strip(), gpids)
-            st.success(f"Gruppe «{gname.strip()}» gespeichert."); st.rerun()
-    with c2:
-        if groups:
-            dname = st.selectbox("Gruppe entfernen", list(groups.keys()))
-            if st.button("Entfernen") and dname:
-                unassign_group(DB_PATH, groups[dname])
-                st.success(f"Gruppe «{dname}» entfernt."); st.rerun()
+    ui.section("Alle Merchants", f"{num(len(rows))} Einträge · nach Name sortiert · "
+               "Gruppieren & Hochrechnung unter Einstellungen → Merchants")
+    _merchant_table_header()
+    for row in rows:
+        is_group = row["pid_display"] is None
+        key = f"open_{_row_key(row)}"
+        cols = st.columns(_MERCH_WIDTHS)
+        cols[0].markdown(("👥 " if is_group else "") + row["Name"])
+        if is_group:
+            st.session_state.setdefault(key, False)
+            label = ("−" if st.session_state[key] else "+") + f" {len(row['members'])}"
+            if cols[1].button(label, key=f"{key}_btn"):
+                st.session_state[key] = not st.session_state[key]
         else:
-            st.caption("Keine Gruppen vorhanden.")
+            cols[1].write(row["pid_display"])
+        for c, v in zip(cols[2:], _fmt_row_values(row)):
+            c.write(v)
+        if is_group and st.session_state.get(key, False):
+            for mrow in row["members"]:
+                ccols = st.columns(_MERCH_WIDTHS)
+                ccols[0].markdown(f"&nbsp;&nbsp;&nbsp;↳ {mrow['Name']}", unsafe_allow_html=True)
+                ccols[1].write(mrow["pid"])
+                for c, v in zip(ccols[2:], _fmt_row_values(mrow)):
+                    c.write(v)
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE: EINSTELLUNGEN  (Upload · Mapping · ASF)
 # ════════════════════════════════════════════════════════════════════════════
 def page_einstellungen() -> None:
-    ui.page_header("Einstellungen", "Daten laden, Brands mappen, ASF-Konditionen pflegen.",
-                   status="Konfiguration", meta="Upload · Mapping · ASF")
-    tab_up, tab_map, tab_asf, tab_reset = st.tabs(
-        ["Daten laden", "Mapping (Brands)", "ASF & DCC", "Zurücksetzen"])
+    ui.page_header("Einstellungen", "Import, Brand-Mapping, Konditionen, Merchants.",
+                   status="Konfiguration", meta="Import · Mapping · ASF · Merchants")
+    with st.container(key="settings_tabs"):
+        tab_up, tab_map, tab_asf, tab_merch, tab_reset = st.tabs(
+            ["Import", "Mapping (Brands)", "ASF & DCC", "Merchants", "Reset"])
 
     # ── Upload ──
     with tab_up:
@@ -719,14 +859,116 @@ def page_einstellungen() -> None:
         st.session_state.profile = profile
         session_store.save_profile(profile)
 
-    # ── Zurücksetzen ──
+    # ── Merchants (Gruppieren + Hochrechnung) ──
+    with tab_merch:
+        pid_col = "partner_id" if "partner_id" in df.columns else None
+        if not pid_col:
+            ui.info_banner("Keine Partner-ID-Spalte in den Daten.")
+        else:
+            with st.container(key="merchant_subtabs"):
+                sub_group, sub_hoch = st.tabs(["Gruppieren", "Hochrechnung"])
+            options = _merchant_options(df, pid_col)
+
+            # ── Gruppieren ──
+            with sub_group:
+                ui.section("Neue Gruppe anlegen",
+                           "Suche nach Name oder Partner-ID, wähle mehrere aus.")
+                gname = st.text_input("Gruppenname", key="new_group_name")
+                gsel = st.multiselect("Merchants auswählen", options,
+                                      key="new_group_members",
+                                      placeholder="Name oder Partner-ID suchen")
+                if (st.button("Gruppe speichern", type="primary", key="save_new_group")
+                        and gname.strip() and gsel):
+                    assign_group(DB_PATH, gname.strip(), [_pid_from_option(o) for o in gsel])
+                    st.success(f"Gruppe «{gname.strip()}» gespeichert."); st.rerun()
+
+                groups = get_groups(DB_PATH)
+                if groups:
+                    ui.section("Gruppen bearbeiten")
+                    dname = st.selectbox("Gruppe wählen", list(groups.keys()),
+                                         key="edit_group_select")
+                    current_pids = {ui.pid(p) for p in groups[dname]}
+                    default_sel = [o for o in options if _pid_from_option(o) in current_pids]
+                    esel = st.multiselect("Mitglieder", options, default=default_sel,
+                                          key=f"edit_members_{dname}")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("Änderungen speichern", type="primary",
+                                     key="save_edit_group"):
+                            new_pids = {_pid_from_option(o) for o in esel}
+                            removed = current_pids - new_pids
+                            if removed:
+                                unassign_group(DB_PATH, list(removed))
+                            if new_pids:
+                                assign_group(DB_PATH, dname, list(new_pids))
+                            st.success(f"Gruppe «{dname}» aktualisiert."); st.rerun()
+                    with c2:
+                        if st.button("Gruppe löschen", key="delete_group"):
+                            unassign_group(DB_PATH, groups[dname])
+                            st.success(f"Gruppe «{dname}» gelöscht."); st.rerun()
+                else:
+                    st.caption("Noch keine Gruppen definiert.")
+
+            # ── Hochrechnung ──
+            with sub_hoch:
+                ui.section("Hochrechnung",
+                           "Jahresumsatz je Merchant oder Gruppe eintragen, Kennzahlen hochrechnen.")
+                groups = get_groups(DB_PATH)
+                rows = _merchant_rows(df, pid_col, groups)
+                for row in rows:
+                    is_group = row["pid_display"] is None
+                    rk = _row_key(row)
+                    with st.container(border=True):
+                        c1, c2 = st.columns([2.2, 1.3])
+                        c1.markdown(("👥 **" if is_group else "**") + row["Name"] + "**")
+                        c1.caption(
+                            f"Ist: Umsatz CHF {chf_c(row['Umsatz'])} · {num(row['Txn'])} Txn · "
+                            f"Diff. CHF {chf(row['Diff.'])} · DCC-Vtl. CHF {chf(row['DCC-Vtl.'])}")
+                        annual_vol = c2.number_input(
+                            "Jahresumsatz CHF", min_value=0.0, value=0.0,
+                            step=10000.0, format="%.0f", key=f"hoch_vol_{rk}")
+
+                        member_vols: dict[str, float] = {}
+                        if is_group and row["members"]:
+                            open_key = f"hoch_open_{rk}"
+                            st.session_state.setdefault(open_key, False)
+                            btn_label = (
+                                "− Mitglieder ausblenden" if st.session_state[open_key]
+                                else f"+ {len(row['members'])} Mitglieder einzeln eintragen")
+                            if st.button(btn_label, key=f"{open_key}_btn"):
+                                st.session_state[open_key] = not st.session_state[open_key]
+                            if st.session_state[open_key]:
+                                for mrow in row["members"]:
+                                    mc1, mc2 = st.columns([2.2, 1.3])
+                                    mc1.markdown(
+                                        f"&nbsp;&nbsp;↳ {mrow['Name']} ({mrow['pid']})",
+                                        unsafe_allow_html=True)
+                                    mv = mc2.number_input(
+                                        "Jahresumsatz CHF", min_value=0.0, value=0.0,
+                                        step=10000.0, format="%.0f",
+                                        key=f"hoch_vol_{rk}_{mrow['pid']}",
+                                        label_visibility="collapsed")
+                                    if mv > 0:
+                                        member_vols[mrow["pid"]] = mv
+
+                        if is_group and member_vols:
+                            _render_group_member_projection(row, member_vols)
+                        elif annual_vol > 0:
+                            proj = _project_row(row["_df"], annual_vol)
+                            if proj:
+                                _render_projection(proj)
+                            else:
+                                st.warning(
+                                    "Hochrechnung nicht möglich (keine Käufe in der Auswahl).")
+
+    # ── Reset ──
     with tab_reset:
         ui.section("Analyse zurücksetzen",
                    "Geladene Daten und Konditionen verwerfen, wieder bei null starten.")
         st.caption("Betrifft nur die laufende Arbeitssitzung (data/session/). Die "
                    "Brand-Stammliste (config/brands.json) bleibt unberührt.")
         confirm = st.checkbox("Ja, aktuelle Daten und Konditionen verwerfen.")
-        if st.button("Zurücksetzen", type="primary", disabled=not confirm):
+        if st.button("Reset", type="primary", disabled=not confirm):
             session_store.reset()
             st.session_state.df = pd.DataFrame()
             st.session_state.report = None
@@ -744,7 +986,7 @@ if page == "Präsentation":
     page_praesentation()
 elif page == "Transaktionen":
     page_transaktionen()
-elif page == "Partner & Gruppen":
-    page_partner()
+elif page == "Merchants":
+    page_merchants()
 else:
     page_einstellungen()
