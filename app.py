@@ -18,6 +18,7 @@ import pandas as pd
 import streamlit as st
 
 import ui
+import session_store
 from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
 from projection import project_tier_b, CoverageLabel
@@ -54,13 +55,19 @@ init_db(DB_PATH)
 init_groups_db(DB_PATH)
 
 # ── Session state ─────────────────────────────────────────────────────────────
-for _k, _v in [("df", pd.DataFrame()), ("report", None), ("nav", "Präsentation")]:
+# df and profile survive an app restart: loaded from data/session/ on first
+# access, cleared only by the explicit reset button in Einstellungen.
+for _k, _v in [("report", None), ("nav", "Präsentation")]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
+if "df" not in st.session_state:
+    st.session_state.df = session_store.load_df()
+    if st.session_state.df is None:
+        st.session_state.df = pd.DataFrame()
 if "master" not in st.session_state:
     st.session_state.master = load_brand_master()
 if "profile" not in st.session_state:
-    st.session_state.profile = default_rate_profile()
+    st.session_state.profile = session_store.load_profile() or default_rate_profile()
 
 master: BrandMaster = st.session_state.master
 profile: RateProfile = st.session_state.profile
@@ -544,7 +551,8 @@ def page_partner() -> None:
 def page_einstellungen() -> None:
     ui.page_header("Einstellungen", "Daten laden, Brands mappen, ASF-Konditionen pflegen.",
                    status="Konfiguration", meta="Upload · Mapping · ASF")
-    tab_up, tab_map, tab_asf = st.tabs(["Daten laden", "Mapping (Brands)", "ASF & DCC"])
+    tab_up, tab_map, tab_asf, tab_reset = st.tabs(
+        ["Daten laden", "Mapping (Brands)", "ASF & DCC", "Zurücksetzen"])
 
     # ── Upload ──
     with tab_up:
@@ -562,6 +570,7 @@ def page_einstellungen() -> None:
             try:
                 dfn, rpt = ingest_files(paths, DB_PATH, sheet=sheet_val.strip() or None)
                 st.session_state.df = dfn; st.session_state.report = rpt
+                session_store.save_df(dfn)
                 st.success(f"{num(rpt.rows_new)} Zeilen geladen.")
                 st.rerun()
             except Exception as exc:
@@ -581,6 +590,7 @@ def page_einstellungen() -> None:
                     dfn, rpt = ingest_files([str(ROOT / "data" / pick)], DB_PATH,
                                             sheet=sheet_val.strip() or None)
                     st.session_state.df = dfn; st.session_state.report = rpt
+                    session_store.save_df(dfn)
                     st.success(f"«{pick}» geladen.")
                     st.rerun()
                 except Exception as exc:
@@ -707,6 +717,26 @@ def page_einstellungen() -> None:
                                           float(r["Trx-Fee Rp."])/100.0, float(r["Min CHF"]))
                 for _, r in ed.iterrows()}
         st.session_state.profile = profile
+        session_store.save_profile(profile)
+
+    # ── Zurücksetzen ──
+    with tab_reset:
+        ui.section("Analyse zurücksetzen",
+                   "Geladene Daten und Konditionen verwerfen, wieder bei null starten.")
+        st.caption("Betrifft nur die laufende Arbeitssitzung (data/session/). Die "
+                   "Brand-Stammliste (config/brands.json) bleibt unberührt.")
+        confirm = st.checkbox("Ja, aktuelle Daten und Konditionen verwerfen.")
+        if st.button("Zurücksetzen", type="primary", disabled=not confirm):
+            session_store.reset()
+            st.session_state.df = pd.DataFrame()
+            st.session_state.report = None
+            st.session_state.profile = default_rate_profile()
+            for _t in OFFERABLE_TYPES:
+                for _pfx in ("asf_", "trx_", "mf_"):
+                    st.session_state.pop(f"{_pfx}{_t}", None)
+            st.session_state.pop("dcc_in", None)
+            st.success("Zurückgesetzt. Lade einen neuen Export, um weiterzuarbeiten.")
+            st.rerun()
 
 
 # ── Router ──────────────────────────────────────────────────────────────────
