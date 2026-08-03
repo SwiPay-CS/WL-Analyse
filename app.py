@@ -218,26 +218,29 @@ def page_praesentation() -> None:
     # Selection row
     c1, c2, c3 = st.columns([1.4, 1.4, 1])
     with c1:
-        scope = st.radio("Auswahl", ["Alle", "Partner", "Gruppe"], horizontal=True,
+        scope = st.radio("Auswahl", ["Alle", "Auswahl"], horizontal=True,
                          label_visibility="collapsed")
     groups = get_groups(DB_PATH)
-    sel_pids = None
-    gname = None
+    sel_display: list[str] = []
+    sel_group_names: list[str] = []
+    sel_partner_pids: list[str] = []
     label = "Alle Partner"
     with c2:
-        if scope == "Partner" and pid_col:
-            opts = sorted(df[pid_col].dropna().astype(str).map(ui.pid).unique().tolist())
-            sel_pids = st.multiselect("Partner-ID", opts, default=opts[:1] or opts,
-                                      label_visibility="collapsed",
-                                      placeholder="Partner-ID wählen")
-            label = ", ".join(sel_pids) if sel_pids else "Alle Partner"
-        elif scope == "Gruppe" and groups:
-            gname = st.selectbox("Gruppe", list(groups.keys()),
-                                 label_visibility="collapsed")
-            sel_pids = [ui.pid(p) for p in groups.get(gname, [])]
-            label = f"Gruppe «{gname}»"
-        elif scope == "Gruppe":
-            st.caption("Noch keine Gruppen — unter «Einstellungen → Merchants» anlegen.")
+        if scope == "Auswahl":
+            partner_opts = _merchant_options(df, pid_col) if pid_col else []
+            group_opts = [f"👥 {g}" for g in groups]
+            combined_opts = sorted(partner_opts + group_opts, key=str.lower)
+            sel_display = st.multiselect(
+                "Partner/Gruppe", combined_opts, default=[],
+                label_visibility="collapsed",
+                placeholder="Partner oder Gruppe suchen (Name oder Partner-ID)")
+            sel_group_names = [s[2:] for s in sel_display if s.startswith("👥 ")]
+            sel_partner_pids = [_pid_from_option(s) for s in sel_display
+                                if not s.startswith("👥 ")]
+            if sel_display:
+                label = ", ".join(sel_display)
+            if not groups:
+                st.caption("Noch keine Gruppen — unter «Einstellungen → Merchants» anlegen.")
     with c3:
         st.caption("Hochrechnung hinterlegen: **Einstellungen → Merchants → "
                   "Hochrechnung**. Wird hier automatisch übernommen.")
@@ -248,7 +251,16 @@ def page_praesentation() -> None:
     elif months:
         frm = to = months[0]
 
-    # Filter
+    # Filter -- eine Auswahl ist die Vereinigung aller ausgewaehlten Partner-IDs
+    # und der Mitglieder aller ausgewaehlten Gruppen (Partner, die in mehreren
+    # Auswahl-Elementen vorkommen, werden dedupliziert, nicht doppelt gezaehlt).
+    sel_pids = None
+    if scope == "Auswahl":
+        combined = set(sel_partner_pids)
+        for gn in sel_group_names:
+            combined.update(ui.pid(p) for p in groups.get(gn, []))
+        sel_pids = sorted(combined)
+
     mask = pd.Series(True, index=df.index)
     if sel_pids is not None and pid_col:
         mask &= df[pid_col].astype(str).map(ui.pid).isin(sel_pids)
@@ -256,7 +268,8 @@ def page_praesentation() -> None:
     fdf = df[mask].reset_index(drop=True)
 
     partner_disp = label
-    if scope == "Partner" and sel_pids and "partner_name" in fdf.columns and not fdf.empty:
+    is_single_partner = (len(sel_display) == 1 and not sel_display[0].startswith("👥 "))
+    if scope == "Auswahl" and is_single_partner and "partner_name" in fdf.columns and not fdf.empty:
         names = fdf["partner_name"].dropna().unique().tolist()
         if len(names) == 1:
             partner_disp = names[0]
@@ -282,18 +295,10 @@ def page_praesentation() -> None:
     if scope == "Alle":
         entities = _entities_for_rows(_merchant_rows(df, pid_col, groups),
                                       partner_vols, group_vols, frm, to)
-    elif scope == "Partner" and pid_col and sel_pids:
-        entities = _entities_for_pids(df, pid_col, sel_pids, partner_vols, frm, to)
-    elif scope == "Gruppe" and gname and groups.get(gname):
-        # Muss ueber die VOLLSTAENDIGE Gruppen-Zuordnung laufen (nicht nur
-        # {gname: [...]}) -- sonst behandelt _merchant_rows die Mitglieder
-        # ALLER ANDEREN Gruppen faelschlich als "ungrouped" und mischt sie
-        # in die Aggregation dieser einen Gruppe.
-        group_row = next(
-            (r for r in _merchant_rows(df, pid_col, groups)
-             if r["pid_display"] is None and r["Name"] == gname), None)
-        entities = _entities_for_rows([group_row], partner_vols, group_vols, frm, to) \
-            if group_row else []
+    elif scope == "Auswahl" and (sel_group_names or sel_partner_pids):
+        entities = _entities_for_selection(
+            df, pid_col, groups, sel_group_names, sel_partner_pids,
+            partner_vols, group_vols, frm, to)
     else:
         entities = []
     agg = aggregate(entities, params, offer, profile.dcc_pct)
@@ -664,7 +669,8 @@ def _period_entity(label: str, key: str, raw_df: pd.DataFrame, annual_volume: fl
 
 def _entities_for_rows(rows: list[dict], partner_vols: dict[str, float],
                        group_vols: dict[str, float], frm, to) -> list[EntityInput]:
-    """One EntityInput per top-level row (Präsentation-Scope "Alle"/"Gruppe").
+    """One EntityInput per top-level row (Präsentation-Scope "Alle", oder eine
+    einzelne Gruppen-Zeile aus "Auswahl").
     Präzedenz je Gruppe, wie in Einstellungen → Hochrechnung: Mitglieder-Werte
     auf Partner-Ebene schlagen den Gruppen-Lump-Sum; ohne beides bleibt die
     Gruppe/der Merchant beim Ist (annual_volume=0)."""
@@ -693,9 +699,9 @@ def _entities_for_rows(rows: list[dict], partner_vols: dict[str, float],
 
 def _entities_for_pids(base_df: pd.DataFrame, pid_col: str, pids: list[str],
                        partner_vols: dict[str, float], frm, to) -> list[EntityInput]:
-    """One EntityInput pro einzeln ausgewählter Partner-ID (Präsentation-Scope
-    "Partner", Mehrfachauswahl) -- unabhängig von einer evtl. bestehenden
-    Gruppenzugehörigkeit, da der Nutzer hier explizit einzelne IDs wählt."""
+    """One EntityInput pro einzeln ausgewählter Partner-ID -- unabhängig von
+    einer evtl. bestehenden Gruppenzugehörigkeit, da der Nutzer hier explizit
+    einzelne IDs wählt (keine Gruppe im Spiel, siehe _entities_for_selection)."""
     pid_clean = base_df[pid_col].astype(str).map(ui.pid)
     entities: list[EntityInput] = []
     for pid in pids:
@@ -707,6 +713,34 @@ def _entities_for_pids(base_df: pd.DataFrame, pid_col: str, pids: list[str],
                 name = str(names[0])
         entities.append(_period_entity(
             f"{name} ({pid})", pid, praw, partner_vols.get(pid, 0.0), frm, to))
+    return entities
+
+
+def _entities_for_selection(
+    base_df: pd.DataFrame, pid_col: str, groups: dict[str, list[str]],
+    sel_group_names: list[str], sel_partner_pids: list[str],
+    partner_vols: dict[str, float], group_vols: dict[str, float], frm, to,
+) -> list[EntityInput]:
+    """Präsentation-Scope "Auswahl": ein oder mehrere Partner und/oder Gruppen
+    gemischt ausgewählt. Jede Gruppe expandiert (via _entities_for_rows) nach
+    derselben Mitglieder-Präzedenz wie sonst überall; direkt ausgewählte
+    Partner, die bereits über eine ausgewählte Gruppe abgedeckt sind, werden
+    NICHT nochmal einzeln gezählt (keine Doppelzählung)."""
+    entities: list[EntityInput] = []
+    covered: set[str] = set()
+    if sel_group_names:
+        all_rows = _merchant_rows(base_df, pid_col, groups)
+        for gn in sel_group_names:
+            group_row = next(
+                (r for r in all_rows if r["pid_display"] is None and r["Name"] == gn),
+                None)
+            if group_row:
+                entities += _entities_for_rows(
+                    [group_row], partner_vols, group_vols, frm, to)
+                covered.update(ui.pid(p) for p in groups.get(gn, []))
+    extra_pids = [p for p in sel_partner_pids if p not in covered]
+    if extra_pids:
+        entities += _entities_for_pids(base_df, pid_col, extra_pids, partner_vols, frm, to)
     return entities
 
 
