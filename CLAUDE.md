@@ -38,15 +38,38 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   angenommen. DCC-Vorteil = SP minus WL als separate KPI. Floor zuerst,
   Cashback danach.
 - Nicht-offerierbare Brands (z. B. TWINT) → Delta 0, sichtbar als Null-Effekt.
-- Gruppierung nach Partner-ID (Name nur Label). Fan-out-Flag bei mehreren
-  Verträgen mit identischem Jahresumsatz; Default bis Auflösung: nicht summieren.
+- Gruppierung nach Partner-ID (Name nur Label).
 - Mehrdatei-Ingest sicher, kein blindes pd.concat. Dedup dreistufig: Dateiname
   (weich) → Inhalts-Hash (hart) → Zeilen-Schlüssel (Backstop). Duplikate
-  verwerfen, nie still, mit Abgleichsbericht.
-- Hochrechnung: KEINE lineare 365-Tage-Projektion. Anker ist der bekannte
-  Jahresumsatz je Partner-ID. Stufe A (Jahresumsatz pro Brand bekannt) oder
-  Stufe B (Mix auf Jahresumsatz skaliert). Deckungs-Labels >60 / 25–60 / <25 %.
-  Planungsband ±15 %, immer bei Hochrechnung.
+  verwerfen, nie still, mit Abgleichsbericht. Der ingest-seitige Fan-out-Flag
+  (`fanout_partner_ids` in ingest.py, mehrere Vertragsnummern mit identischem
+  Jahresumsatz IM EXPORT) ist ein separates Konzept von der Hochrechnung
+  weiter unten — bleibt unverändert (Datenauffälligkeit, manuell zu klären).
+- Hochrechnung (Stand 2026-08-03, überarbeitet): KEINE lineare
+  365-Tage-Projektion. Anker ist der bekannte Jahresumsatz je Partner-ID/
+  Gruppe. Aktuell nur Tier B verdrahtet (Mix auf Jahresumsatz skaliert; Tier A
+  pro Brand existiert in projection.py, bewusst nicht an die UI angebunden).
+  Eingabe unter Einstellungen → Merchants → Hochrechnung ("Schnellhochrechnung"),
+  durable in swipay.db (hochrechnung_store.py) gespeichert, Partner-ID/
+  Gruppenname-gebunden (nicht sitzungsgebunden, übersteht Reset — wie die
+  Gruppen-Zuordnungen). Wirkt sich automatisch auf die Seite Präsentation aus
+  (Scopes Alle / mehrere Partner / eine Gruppe; siehe aggregation.py) — kein
+  separates Eingabefeld dort mehr.
+  - Deckungs-Labels >60 / 25–60 / <25 %, Planungsband ±15 % (siehe
+    projection.py). Bei mehreren Entities im Scope bezieht sich der
+    Deckungsgrad NUR auf die tatsächlich hochgerechneten Entities.
+  - Portfolio-Abdeckung ist eine zweite, unabhängige Kennzahl: Anteil des
+    Ist-Bruttoumsatzes im Scope, der überhaupt hochgerechnet wurde (sinkt,
+    wenn viele Merchants/Gruppen im Scope keine Hochrechnung haben) — anders
+    als der Deckungsgrad, der davon unberührt bleibt.
+  - Fan-out bei der Hochrechnung (mehrere Merchants/Gruppen mit identischem
+    Jahresumsatz-Betrag): wird IMMER summiert, nur als Hinweis markiert
+    (Bildschirm-Banner + PDF-Datenhinweis) — kein Blocker, keine Persistenz
+    einer Auflösungs-Entscheidung. Ersetzt den alten Default "nicht summieren".
+  - Datenqualitäts-Hinweis: sichtbares Banner in der Präsentation ab
+    "niedrige Deckung" (amber) und "indikativ" (rot), Farben synchron mit den
+    PDF-Badges (reporter.py). Nie verstecken, auch bei schlechter Deckung —
+    lieber eine Lücke als eine Lüge.
 - Fixkosten und IC-Cap-Feinlogik = Phase 6, optional, nur bei konkretem Bedarf.
 
 ## Harter Validierungs-Anker (Davos-Datensatz)

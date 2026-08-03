@@ -27,6 +27,7 @@ BLUE       = "#224f59"   # Signal Blue — structure / header
 CYAN       = "#3c8f99"   # Signal Cyan — infographics
 GREEN      = "#949f50"   # Signal Green — positive results
 ORANGE     = "#ec6608"   # Signal Orange — CTA / hint
+AMBER      = "#c89632"   # niedrige Deckung — matches reporter.py's PDF badge
 BG         = "#f4f2ef"
 WHITE      = "#ffffff"
 LINE       = "#e6e1da"
@@ -198,6 +199,33 @@ def pill(text: str, kind: str = "neutral") -> str:
 
 def info_banner(html: str) -> None:
     st.markdown(f'<div class="sp-banner">{html}</div>', unsafe_allow_html=True)
+
+
+# Accepts projection.CoverageLabel members directly (str Enum -- compares and
+# hashes equal to its plain string value, so no import of projection needed
+# here to keep ui.py a self-contained design-system module).
+_COVERAGE_BANNER_TONE = {
+    "niedrige Deckung": (AMBER, "Datenbasis eingeschränkt (Deckung 25–60 %): "
+                         "Punktschätzung plausibel, Planungsband beachten."),
+    "indikativ": (ROT, "Datenbasis indikativ: Für eine belastbare Hochrechnung "
+                  "werden mindestens 25 % des Jahresumsatzes als Grundlage "
+                  "empfohlen. Weitere Monatsdaten einsenden."),
+}
+
+
+def coverage_banner(label, coverage_pct: float) -> None:
+    """Auffälliger Hinweis bei eingeschränkter/indikativer Hochrechnungsbasis.
+    Farben spiegeln die PDF-Badges (reporter.py) für Konsistenz zwischen
+    Bildschirm und Kundenbericht. No-op at hoher Deckung (kein Banner)."""
+    tone = _COVERAGE_BANNER_TONE.get(label)
+    if tone is None:
+        return
+    color, text = tone
+    st.markdown(
+        f'<div class="sp-banner" style="border-color:{color};border-left:5px solid {color};">'
+        f'<b>Deckungsgrad {coverage_pct:.0%}</b> · {text}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Altair charts (CI-themed) ─────────────────────────────────────────────────

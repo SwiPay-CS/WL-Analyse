@@ -20,9 +20,11 @@ import streamlit as st
 
 import ui
 import session_store
+import hochrechnung_store as hoch_store
 from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
-from projection import project_tier_b, CoverageLabel
+from projection import CoverageLabel
+from aggregation import EntityInput, aggregate
 from db_groups import init_groups_db, get_groups, assign_group, unassign_group
 from reporter import build_pdf, build_csv
 from settings import (
@@ -54,6 +56,18 @@ chf, num, pct, chf_c = ui.chf, ui.num, ui.pct, ui.chf_compact
 
 init_db(DB_PATH)
 init_groups_db(DB_PATH)
+hoch_store.init_hochrechnung_db(DB_PATH)
+
+# One-time migration: the old session-scoped Hochrechnung snapshot
+# (data/session/hochrechnung.json) becomes durable, Partner-ID/Gruppenname-
+# keyed rows in swipay.db (see hochrechnung_store.py). Renaming the legacy
+# file after a successful migration makes this a no-op on every later start.
+_LEGACY_HOCH_JSON = ROOT / "data" / "session" / "hochrechnung.json"
+if _LEGACY_HOCH_JSON.exists():
+    import json as _json
+    _legacy_vals = _json.loads(_LEGACY_HOCH_JSON.read_text(encoding="utf-8"))
+    hoch_store.migrate_from_session_json(DB_PATH, _legacy_vals)
+    _LEGACY_HOCH_JSON.rename(_LEGACY_HOCH_JSON.with_suffix(".json.migrated"))
 
 # ── Session state ─────────────────────────────────────────────────────────────
 # df and profile survive an app restart: loaded from data/session/ on first
@@ -208,6 +222,7 @@ def page_praesentation() -> None:
                          label_visibility="collapsed")
     groups = get_groups(DB_PATH)
     sel_pids = None
+    gname = None
     label = "Alle Partner"
     with c2:
         if scope == "Partner" and pid_col:
@@ -224,9 +239,8 @@ def page_praesentation() -> None:
         elif scope == "Gruppe":
             st.caption("Noch keine Gruppen — unter «Einstellungen → Merchants» anlegen.")
     with c3:
-        annual_vol = st.number_input("Jahresumsatz CHF", min_value=0.0, value=0.0,
-                                     step=10000.0, format="%.0f",
-                                     help="Für die Jahres-Hochrechnung. 0 = Zeitraum-Ist.")
+        st.caption("Hochrechnung hinterlegen: **Einstellungen → Merchants → "
+                  "Hochrechnung**. Wird hier automatisch übernommen.")
     frm = to = None
     if len(months) >= 2:
         frm, to = st.select_slider("Zeitraum", options=months,
@@ -262,33 +276,58 @@ def page_praesentation() -> None:
     t = engine_totals(comp)
     d = _derive(fdf, comp, t)
 
-    # ── HERO: Jahres-Ersparnis (Hochrechnung) ─────────────────────────────────
-    proj = None
-    if annual_vol > 0:
-        try:
-            proj = project_tier_b(fdf, params, offer, profile.dcc_pct,
-                                  annual_volume=annual_vol)
-        except ValueError:
-            proj = None
+    # ── HERO: Jahres-Ersparnis (Hochrechnung, aus Einstellungen übernommen) ───
+    partner_vols = hoch_store.get_partner_volumes(DB_PATH)
+    group_vols = hoch_store.get_group_volumes(DB_PATH)
+    if scope == "Alle":
+        entities = _entities_for_rows(_merchant_rows(df, pid_col, groups),
+                                      partner_vols, group_vols, frm, to)
+    elif scope == "Partner" and pid_col and sel_pids:
+        entities = _entities_for_pids(df, pid_col, sel_pids, partner_vols, frm, to)
+    elif scope == "Gruppe" and gname and groups.get(gname):
+        # Muss ueber die VOLLSTAENDIGE Gruppen-Zuordnung laufen (nicht nur
+        # {gname: [...]}) -- sonst behandelt _merchant_rows die Mitglieder
+        # ALLER ANDEREN Gruppen faelschlich als "ungrouped" und mischt sie
+        # in die Aggregation dieser einen Gruppe.
+        group_row = next(
+            (r for r in _merchant_rows(df, pid_col, groups)
+             if r["pid_display"] is None and r["Name"] == gname), None)
+        entities = _entities_for_rows([group_row], partner_vols, group_vols, frm, to) \
+            if group_row else []
+    else:
+        entities = []
+    agg = aggregate(entities, params, offer, profile.dcc_pct)
+
     hcol, kcol = st.columns([1.15, 1])
     with hcol:
-        if proj is not None:
-            cov = proj.coverage
-            headline = (proj.band_low if cov.label == CoverageLabel.INDICATIVE
-                        else proj.saving_annual)
+        if agg is not None and agg.has_projection:
+            cov = agg.coverage
+            headline = (agg.band_low if cov.label == CoverageLabel.INDICATIVE
+                        else agg.saving_annual)
             acc = ui.GREEN if headline >= 0 else ui.ROT
             cov_txt = {CoverageLabel.SIMULATABLE: "hohe Deckung",
                        CoverageLabel.LOW_COVERAGE: "mittlere Deckung",
                        CoverageLabel.INDICATIVE: "indikativ"}[cov.label]
             ui.hero("Ersparnis pro Jahr (Hochrechnung)", f"CHF {chf(headline, 0)}",
-                    band=f"Planungsband CHF {chf(proj.band_low, 0)} – {chf(proj.band_high, 0)}",
+                    band=f"Planungsband CHF {chf(agg.band_low, 0)} – {chf(agg.band_high, 0)}",
                     foot=f"Deckungsgrad {cov.coverage_pct:.0%} · {cov_txt} · "
-                         f"DCC-Vorteil p.a. CHF {chf(proj.dcc_advantage_annual, 0)}",
+                         f"DCC-Vorteil p.a. CHF {chf(agg.dcc_advantage_annual, 0)}",
                     accent=acc)
+            ui.coverage_banner(cov.label, cov.coverage_pct)
+            n_total = len(agg.used) + len(agg.skipped)
+            st.caption(
+                f"Portfolio-Abdeckung: {agg.portfolio_coverage_pct:.0%} des "
+                f"Ist-Bruttoumsatzes hochgerechnet ({len(agg.used)} von {n_total} "
+                "Merchants/Gruppen).")
+            for cluster in agg.duplicate_groups:
+                st.warning(
+                    f"Möglicher Fan-out: {', '.join(cluster)} haben denselben "
+                    "Jahresumsatz hinterlegt — wird dennoch summiert. Bitte prüfen.")
         else:
             acc = ui.GREEN if d["diff"] >= 0 else ui.ROT
             ui.hero("Ersparnis im Zeitraum", f"CHF {chf(d['diff'], 0)}",
-                    foot="Jahresumsatz oben eingeben für die Hochrechnung auf 12 Monate.",
+                    foot="Keine Hochrechnung hinterlegt — siehe Einstellungen → "
+                         "Merchants → Hochrechnung.",
                     accent=acc)
     with kcol:
         rel = (d["diff"] / abs(t["wl_net"]) * 100) if t["wl_net"] else 0.0
@@ -367,11 +406,17 @@ def page_praesentation() -> None:
                     avg_ticket=d["avg_ticket"], wl_net=t["wl_net"], sp_net=t["sp_net"],
                     wl_cashback=t["wl_cashback"], sp_cashback=t["sp_cashback"],
                     saving=d["diff"], dcc_advantage=d["dcc_adv"], dcc_pct=profile.dcc_pct,
-                    projection=proj, annual_volume=annual_vol,
+                    projection=agg if (agg and agg.has_projection) else None,
+                    annual_volume=agg.annual_volume_total if agg else 0.0,
+                    portfolio_coverage_pct=(agg.portfolio_coverage_pct
+                                            if agg and agg.has_projection else None),
+                    n_entities_used=len(agg.used) if agg else 0,
+                    n_entities_total=(len(agg.used) + len(agg.skipped)) if agg else 0,
+                    duplicate_volume_warnings=agg.duplicate_groups if agg else [],
                     fanout_partner_ids=(st.session_state.report.fanout_partner_ids
                                         if st.session_state.report else []),
                     zero_effect_brands=zero_brands,
-                    mix_hints=proj.mix_hints if proj else [])
+                    mix_hints=[])
                 st.download_button("PDF herunterladen", data=pdf_bytes,
                     file_name=f"SwiPay_Analyse_{partner_disp}_{frm}_{to}.pdf"
                     .replace(" ", "_").replace(",", "").replace("/", "-"),
@@ -507,8 +552,8 @@ def _merchant_rows(base_df: pd.DataFrame, pid_col: str,
     Group rows carry a 'members' list (each an _agg_merchant() dict + 'pid' +
     '_df'); 'pid_display' is None for groups (renders as a +/- toggle) and the
     cleaned Partner-ID for singles. Every row keeps '_df' — the raw (pre-
-    comparison) transaction slice — so Hochrechnung can run project_tier_b on
-    it directly."""
+    comparison) transaction slice — so the Hochrechnung layer (aggregation.py)
+    can run a Tier-B projection on it directly."""
     pid_clean = base_df[pid_col].astype(str).map(ui.pid)
     m = _with_comparison(base_df)
     grouped = {ui.pid(p) for pids in groups.values() for p in pids}
@@ -589,62 +634,107 @@ def _merchant_table_header() -> None:
         c.markdown(f"**{label}**")
 
 
-def _project_row(df_subset: pd.DataFrame, annual_vol: float):
-    """Tier-B projection for one merchant's/group's raw transaction slice.
-    None if there's nothing to project (no volume, no purchases)."""
-    if annual_vol <= 0 or df_subset.empty:
-        return None
-    try:
-        return project_tier_b(df_subset, params, offer, profile.dcc_pct,
-                              annual_volume=annual_vol)
-    except ValueError:
-        return None
+def _entity_from_row(r: dict, label: str, key: str, annual_volume: float) -> EntityInput:
+    """Build an aggregation.EntityInput from a _merchant_rows()/_agg_merchant()
+    row dict (Ist-Aggregate über r['_df'] bereits berechnet)."""
+    return EntityInput(
+        label=label, key=key, df=r["_df"], annual_volume=annual_volume,
+        ist_wl_net=r["WL-Geb."], ist_sp_net=r["SP-Geb."],
+        ist_dcc_adv=r["DCC-Vtl."], ist_txn=r["Txn"], ist_brutto=r["Umsatz"],
+    )
 
 
-def _render_projection(proj) -> None:
-    cov = proj.coverage
+def _period_entity(label: str, key: str, raw_df: pd.DataFrame, annual_volume: float,
+                   frm, to) -> EntityInput:
+    """Build an EntityInput from a raw (pre-comparison) transaction slice,
+    eingeschränkt auf den in der Präsentation gewählten Zeitraum -- Ist-
+    Aggregate und Tier-B-Projektionsbasis müssen denselben Zeitraum spiegeln."""
+    pf = raw_df[_apply_period(raw_df, frm, to)]
+    if pf.empty:
+        agg_row = {"WL-Geb.": 0.0, "SP-Geb.": 0.0, "DCC-Vtl.": 0.0, "Txn": 0, "Umsatz": 0.0}
+    else:
+        agg_row = _agg_merchant(_with_comparison(pf))
+    return EntityInput(
+        label=label, key=key, df=pf, annual_volume=annual_volume,
+        ist_wl_net=agg_row["WL-Geb."], ist_sp_net=agg_row["SP-Geb."],
+        ist_dcc_adv=agg_row["DCC-Vtl."], ist_txn=agg_row["Txn"],
+        ist_brutto=agg_row["Umsatz"],
+    )
+
+
+def _entities_for_rows(rows: list[dict], partner_vols: dict[str, float],
+                       group_vols: dict[str, float], frm, to) -> list[EntityInput]:
+    """One EntityInput per top-level row (Präsentation-Scope "Alle"/"Gruppe").
+    Präzedenz je Gruppe, wie in Einstellungen → Hochrechnung: Mitglieder-Werte
+    auf Partner-Ebene schlagen den Gruppen-Lump-Sum; ohne beides bleibt die
+    Gruppe/der Merchant beim Ist (annual_volume=0)."""
+    entities: list[EntityInput] = []
+    for row in rows:
+        is_group = row["pid_display"] is None
+        if is_group:
+            member_has_vol = any(
+                partner_vols.get(m["pid"], 0.0) > 0 for m in row["members"])
+            if member_has_vol:
+                for m in row["members"]:
+                    entities.append(_period_entity(
+                        f"{m['Name']} ({m['pid']})", m["pid"], m["_df"],
+                        partner_vols.get(m["pid"], 0.0), frm, to))
+            else:
+                entities.append(_period_entity(
+                    row["Name"], row["Name"], row["_df"],
+                    group_vols.get(row["Name"], 0.0), frm, to))
+        else:
+            pid = row["pid_display"]
+            entities.append(_period_entity(
+                f"{row['Name']} ({pid})", pid, row["_df"],
+                partner_vols.get(pid, 0.0), frm, to))
+    return entities
+
+
+def _entities_for_pids(base_df: pd.DataFrame, pid_col: str, pids: list[str],
+                       partner_vols: dict[str, float], frm, to) -> list[EntityInput]:
+    """One EntityInput pro einzeln ausgewählter Partner-ID (Präsentation-Scope
+    "Partner", Mehrfachauswahl) -- unabhängig von einer evtl. bestehenden
+    Gruppenzugehörigkeit, da der Nutzer hier explizit einzelne IDs wählt."""
+    pid_clean = base_df[pid_col].astype(str).map(ui.pid)
+    entities: list[EntityInput] = []
+    for pid in pids:
+        praw = base_df[pid_clean == pid]
+        name = pid
+        if "partner_name" in praw.columns:
+            names = praw["partner_name"].dropna().unique().tolist()
+            if names:
+                name = str(names[0])
+        entities.append(_period_entity(
+            f"{name} ({pid})", pid, praw, partner_vols.get(pid, 0.0), frm, to))
+    return entities
+
+
+def _render_aggregate(agg) -> None:
+    """Unified KPI-Renderer für eine Hochrechnung -- eine Entity (Schnell-
+    Hochrechnung in Einstellungen) oder mehrere summierte Entities (Gruppen-
+    Mitglieder, oder die Präsentation-Scopes)."""
+    cov = agg.coverage
     cov_txt = {CoverageLabel.SIMULATABLE: "hohe Deckung",
                CoverageLabel.LOW_COVERAGE: "mittlere Deckung",
                CoverageLabel.INDICATIVE: "indikativ"}[cov.label]
     ui.kpi_row([
-        {"label": "Diff. p.a.", "value": f"CHF {chf(proj.saving_annual, 0)}",
-         "foot": f"Band {chf(proj.band_low, 0)} – {chf(proj.band_high, 0)}",
-         "accent": ui.GREEN if proj.saving_annual >= 0 else ui.ROT},
-        {"label": "Transaktionen p.a.", "value": num(proj.n_txn_annual), "accent": ui.CYAN},
-        {"label": "DCC-Vorteil p.a.", "value": f"CHF {chf(proj.dcc_advantage_annual)}",
+        {"label": "Diff. p.a.", "value": f"CHF {chf(agg.saving_annual, 0)}",
+         "foot": f"Band {chf(agg.band_low, 0)} – {chf(agg.band_high, 0)}",
+         "accent": ui.GREEN if agg.saving_annual >= 0 else ui.ROT},
+        {"label": "Transaktionen p.a.", "value": num(agg.n_txn_annual), "accent": ui.CYAN},
+        {"label": "DCC-Vorteil p.a.", "value": f"CHF {chf(agg.dcc_advantage_annual)}",
          "accent": ui.CYAN},
         {"label": "Deckungsgrad", "value": f"{cov.coverage_pct:.0%}", "foot": cov_txt,
          "accent": ui.BLUE},
     ])
-
-
-def _render_group_member_projection(row: dict, member_vols: dict[str, float]) -> None:
-    """Sum a Tier-B projection per member that has its own Jahresumsatz;
-    members without one keep their raw actuals (scale = 1). Per-member input
-    takes precedence over a single group-level Jahresumsatz."""
-    wl = sp = dcc_adv = txn = 0.0
-    used, skipped = [], []
-    for mrow in row["members"]:
-        av = member_vols.get(mrow["pid"], 0.0)
-        proj = _project_row(mrow["_df"], av) if av > 0 else None
-        label = f"{mrow['Name']} ({mrow['pid']})"
-        if proj:
-            wl += proj.wl_net_annual; sp += proj.sp_net_annual
-            dcc_adv += proj.dcc_advantage_annual; txn += proj.n_txn_annual
-            used.append(label)
-        else:
-            wl += mrow["WL-Geb."]; sp += mrow["SP-Geb."]
-            dcc_adv += mrow["DCC-Vtl."]; txn += mrow["Txn"]
-            skipped.append(label)
-    diff = wl - sp
-    ui.kpi_row([
-        {"label": "Diff. p.a. (Summe)", "value": f"CHF {chf(diff, 0)}",
-         "accent": ui.GREEN if diff >= 0 else ui.ROT},
-        {"label": "Transaktionen p.a.", "value": num(txn), "accent": ui.CYAN},
-        {"label": "DCC-Vorteil p.a.", "value": f"CHF {chf(dcc_adv)}", "accent": ui.CYAN},
-    ])
-    st.caption(f"Hochgerechnet: {', '.join(used) if used else '–'}. "
-              f"Ist-Werte übernommen (kein Jahresumsatz): {', '.join(skipped) if skipped else '–'}.")
+    if agg.skipped or len(agg.used) > 1:
+        st.caption(f"Hochgerechnet: {', '.join(agg.used) if agg.used else '–'}. "
+                  f"Ist-Werte übernommen (kein Jahresumsatz): "
+                  f"{', '.join(agg.skipped) if agg.skipped else '–'}.")
+    for cluster in agg.duplicate_groups:
+        st.warning(f"Möglicher Fan-out: {', '.join(cluster)} haben denselben "
+                  "Jahresumsatz hinterlegt — wird dennoch summiert. Bitte prüfen.")
 
 
 def page_merchants() -> None:
@@ -911,11 +1001,21 @@ def page_einstellungen() -> None:
 
             # ── Hochrechnung ──
             with sub_hoch:
-                ui.section("Hochrechnung",
-                           "Jahresumsatz je Merchant oder Gruppe eintragen, Kennzahlen hochrechnen.")
+                ui.section(
+                    "Hochrechnung",
+                    "Jahresumsatz je Merchant oder Gruppe eintragen — für einfachere "
+                    "Szenarien auch als Schnellhochrechnung nutzbar. Wirkt sich "
+                    "automatisch auf die Seite Präsentation aus.")
                 groups = get_groups(DB_PATH)
                 rows = _merchant_rows(df, pid_col, groups)
-                persisted_hoch = session_store.load_hochrechnung()
+                partner_vols_db = hoch_store.get_partner_volumes(DB_PATH)
+                group_vols_db = hoch_store.get_group_volumes(DB_PATH)
+                # Ein Merchant hat EINEN Jahresumsatz, egal ob als eigene Zeile
+                # oder über "Mitglieder einzeln eintragen" editiert -- beide
+                # Wege schreiben auf denselben Partner-ID-Schlüssel in swipay.db.
+                partner_updates: dict[str, float] = {}
+                group_updates: dict[str, float] = {}
+
                 for row in rows:
                     is_group = row["pid_display"] is None
                     rk = _row_key(row)
@@ -927,10 +1027,16 @@ def page_einstellungen() -> None:
                             f"Ist: Umsatz CHF {chf_c(row['Umsatz'])} · {num(row['Txn'])} Txn · "
                             f"Diff. CHF {chf(row['Diff.'])} · DCC-Vtl. CHF {chf(row['DCC-Vtl.'])}")
                         vol_key = f"hoch_vol_{rk}"
-                        st.session_state.setdefault(vol_key, persisted_hoch.get(vol_key, 0.0))
+                        default_vol = (group_vols_db if is_group else partner_vols_db).get(
+                            row["Name"] if is_group else row["pid_display"], 0.0)
+                        st.session_state.setdefault(vol_key, default_vol)
                         annual_vol = c2.number_input(
                             "Jahresumsatz CHF", min_value=0.0,
                             step=10000.0, format="%.0f", key=vol_key)
+                        if is_group:
+                            group_updates[row["Name"]] = annual_vol
+                        else:
+                            partner_updates[row["pid_display"]] = annual_vol
 
                         member_vols: dict[str, float] = {}
                         if is_group and row["members"]:
@@ -949,34 +1055,43 @@ def page_einstellungen() -> None:
                                         unsafe_allow_html=True)
                                     mkey = f"hoch_vol_{rk}_{mrow['pid']}"
                                     st.session_state.setdefault(
-                                        mkey, persisted_hoch.get(mkey, 0.0))
+                                        mkey, partner_vols_db.get(mrow["pid"], 0.0))
                                     mv = mc2.number_input(
                                         "Jahresumsatz CHF", min_value=0.0,
                                         step=10000.0, format="%.0f", key=mkey,
                                         label_visibility="collapsed")
+                                    partner_updates[mrow["pid"]] = mv
                                     if mv > 0:
                                         member_vols[mrow["pid"]] = mv
 
                         if is_group and member_vols:
-                            _render_group_member_projection(row, member_vols)
+                            entities = [
+                                _entity_from_row(
+                                    mrow, f"{mrow['Name']} ({mrow['pid']})", mrow["pid"],
+                                    member_vols.get(mrow["pid"], 0.0))
+                                for mrow in row["members"]
+                            ]
+                            agg = aggregate(entities, params, offer, profile.dcc_pct)
+                            if agg:
+                                _render_aggregate(agg)
                         elif annual_vol > 0:
-                            proj = _project_row(row["_df"], annual_vol)
-                            if proj:
-                                _render_projection(proj)
+                            ent = _entity_from_row(row, label, rk, annual_vol)
+                            agg = aggregate([ent], params, offer, profile.dcc_pct)
+                            if agg and agg.has_projection:
+                                _render_aggregate(agg)
                             else:
                                 st.warning(
                                     "Hochrechnung nicht möglich (keine Käufe in der Auswahl).")
 
-                session_store.save_hochrechnung(
-                    {k: v for k, v in st.session_state.items()
-                     if isinstance(k, str) and k.startswith("hoch_vol_")})
+                hoch_store.save_volumes(DB_PATH, partner_updates, group_updates)
 
     # ── Reset ──
     with tab_reset:
         ui.section("Analyse zurücksetzen",
                    "Geladene Daten und Konditionen verwerfen, wieder bei null starten.")
         st.caption("Betrifft nur die laufende Arbeitssitzung (data/session/). Die "
-                   "Brand-Stammliste (config/brands.json) bleibt unberührt.")
+                   "Brand-Stammliste (config/brands.json), Gruppen-Zuordnungen und "
+                   "hinterlegte Hochrechnungen (swipay.db) bleiben unberührt.")
         confirm = st.checkbox("Ja, aktuelle Daten und Konditionen verwerfen.")
         if st.button("Reset", type="primary", disabled=not confirm):
             session_store.reset()

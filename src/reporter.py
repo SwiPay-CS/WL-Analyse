@@ -182,6 +182,10 @@ def build_pdf(
     dcc_pct: float,
     projection: ProjectionResult | None = None,
     annual_volume: float = 0.0,
+    portfolio_coverage_pct: float | None = None,
+    n_entities_used: int = 0,
+    n_entities_total: int = 0,
+    duplicate_volume_warnings: list[list[str]] | None = None,
     fanout_partner_ids: list[str] | None = None,
     zero_effect_brands: list[str] | None = None,
     mix_hints: list[str] | None = None,
@@ -258,6 +262,11 @@ def build_pdf(
         _kv(pdf, "Planungsband (-15 % / +15 %)",
             f"CHF {_chf(proj.band_low)} - CHF {_chf(proj.band_high)}")
         _kv(pdf, "DCC-Vorteil p.a.", f"CHF {_chf(proj.dcc_advantage_annual)}", bold_val=True)
+        if portfolio_coverage_pct is not None:
+            n_note = (f" ({n_entities_used} von {n_entities_total} "
+                      "Merchants/Gruppen)" if n_entities_total else "")
+            _kv(pdf, "Portfolio-Abdeckung",
+                f"{portfolio_coverage_pct:.0%} des Ist-Umsatzes hochgerechnet{n_note}")
         pdf.ln(3)
 
         if cov.label == CoverageLabel.INDICATIVE:
@@ -293,11 +302,12 @@ def build_pdf(
 
     # ── Kurzbericht / Datenhinweise ───────────────────────────────────────────
     flags_fanout   = fanout_partner_ids or []
+    flags_dup_vol  = duplicate_volume_warnings or []
     flags_zero     = zero_effect_brands or []
     flags_mix      = mix_hints or []
     cov_lbl        = projection.coverage.label if projection else None
 
-    has_flags = bool(flags_fanout or flags_zero or flags_mix
+    has_flags = bool(flags_fanout or flags_dup_vol or flags_zero or flags_mix
                      or cov_lbl in (CoverageLabel.LOW_COVERAGE, CoverageLabel.INDICATIVE))
 
     if has_flags:
@@ -320,6 +330,13 @@ def build_pdf(
                   f"Datenauffälligkeit (Fan-out): Partner-ID {pid} – "
                   "Vor Angebotsstellung bitte manuell klären.",
                   rgb=_ROT)
+
+        for cluster in flags_dup_vol:
+            _flag(pdf,
+                  f"Möglicher Fan-out (Hochrechnung): {', '.join(cluster)} haben "
+                  "denselben Jahresumsatz hinterlegt – wird dennoch summiert, "
+                  "bitte prüfen.",
+                  rgb=_AMBER)
 
         for brand in flags_zero:
             _flag(pdf,

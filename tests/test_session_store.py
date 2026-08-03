@@ -45,24 +45,12 @@ def test_save_and_load_profile_round_trips(tmp_path):
     assert loaded.brand_overrides["Visa Debit"].asf_pct == 0.0099
 
 
-def test_load_hochrechnung_returns_empty_dict_when_nothing_saved(tmp_path):
-    assert session_store.load_hochrechnung(tmp_path) == {}
-
-
-def test_save_and_load_hochrechnung_round_trips(tmp_path):
-    values = {"hoch_vol_s_31035": 250000.0, "hoch_vol_g_Davos_49379": 90000.0}
-    session_store.save_hochrechnung(values, tmp_path)
-    assert session_store.load_hochrechnung(tmp_path) == values
-
-
 def test_reset_removes_all_files(tmp_path):
     session_store.save_df(pd.DataFrame({"a": [1]}), tmp_path)
     session_store.save_profile(_profile(), tmp_path)
-    session_store.save_hochrechnung({"hoch_vol_s_31035": 250000.0}, tmp_path)
     session_store.reset(tmp_path)
     assert session_store.load_df(tmp_path) is None
     assert session_store.load_profile(tmp_path) is None
-    assert session_store.load_hochrechnung(tmp_path) == {}
 
 
 def test_reset_on_empty_dir_does_not_raise(tmp_path):
