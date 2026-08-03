@@ -915,18 +915,22 @@ def page_einstellungen() -> None:
                            "Jahresumsatz je Merchant oder Gruppe eintragen, Kennzahlen hochrechnen.")
                 groups = get_groups(DB_PATH)
                 rows = _merchant_rows(df, pid_col, groups)
+                persisted_hoch = session_store.load_hochrechnung()
                 for row in rows:
                     is_group = row["pid_display"] is None
                     rk = _row_key(row)
+                    label = row["Name"] if is_group else f"{row['Name']} ({row['pid_display']})"
                     with st.container(border=True):
                         c1, c2 = st.columns([2.2, 1.3])
-                        c1.markdown(("👥 **" if is_group else "**") + row["Name"] + "**")
+                        c1.markdown(("👥 **" if is_group else "**") + label + "**")
                         c1.caption(
                             f"Ist: Umsatz CHF {chf_c(row['Umsatz'])} · {num(row['Txn'])} Txn · "
                             f"Diff. CHF {chf(row['Diff.'])} · DCC-Vtl. CHF {chf(row['DCC-Vtl.'])}")
+                        vol_key = f"hoch_vol_{rk}"
+                        st.session_state.setdefault(vol_key, persisted_hoch.get(vol_key, 0.0))
                         annual_vol = c2.number_input(
-                            "Jahresumsatz CHF", min_value=0.0, value=0.0,
-                            step=10000.0, format="%.0f", key=f"hoch_vol_{rk}")
+                            "Jahresumsatz CHF", min_value=0.0,
+                            step=10000.0, format="%.0f", key=vol_key)
 
                         member_vols: dict[str, float] = {}
                         if is_group and row["members"]:
@@ -943,10 +947,12 @@ def page_einstellungen() -> None:
                                     mc1.markdown(
                                         f"&nbsp;&nbsp;↳ {mrow['Name']} ({mrow['pid']})",
                                         unsafe_allow_html=True)
+                                    mkey = f"hoch_vol_{rk}_{mrow['pid']}"
+                                    st.session_state.setdefault(
+                                        mkey, persisted_hoch.get(mkey, 0.0))
                                     mv = mc2.number_input(
-                                        "Jahresumsatz CHF", min_value=0.0, value=0.0,
-                                        step=10000.0, format="%.0f",
-                                        key=f"hoch_vol_{rk}_{mrow['pid']}",
+                                        "Jahresumsatz CHF", min_value=0.0,
+                                        step=10000.0, format="%.0f", key=mkey,
                                         label_visibility="collapsed")
                                     if mv > 0:
                                         member_vols[mrow["pid"]] = mv
@@ -960,6 +966,10 @@ def page_einstellungen() -> None:
                             else:
                                 st.warning(
                                     "Hochrechnung nicht möglich (keine Käufe in der Auswahl).")
+
+                session_store.save_hochrechnung(
+                    {k: v for k, v in st.session_state.items()
+                     if isinstance(k, str) and k.startswith("hoch_vol_")})
 
     # ── Reset ──
     with tab_reset:
@@ -977,6 +987,10 @@ def page_einstellungen() -> None:
                 for _pfx in ("asf_", "trx_", "mf_"):
                     st.session_state.pop(f"{_pfx}{_t}", None)
             st.session_state.pop("dcc_in", None)
+            for _k in [k for k in st.session_state
+                       if isinstance(k, str) and (k.startswith("hoch_vol_")
+                                                  or k.startswith("hoch_open_"))]:
+                st.session_state.pop(_k, None)
             st.success("Zurückgesetzt. Lade einen neuen Export, um weiterzuarbeiten.")
             st.rerun()
 
