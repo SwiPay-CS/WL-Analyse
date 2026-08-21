@@ -40,6 +40,23 @@ def _sample_df() -> pd.DataFrame:
     })
 
 
+def _flat_df(brutto: list[float]) -> pd.DataFrame:
+    """Uniform offerable Debit rows -- callers override is_dcc/region/refund."""
+    n = len(brutto)
+    return pd.DataFrame({
+        "brutto":         brutto,
+        "gebuehren":      [-0.09] * n,
+        "scheme_fee":     [-0.02] * n,
+        "interchange":    [-0.02] * n,
+        "processing_fee": [-0.05] * n,
+        "dcc_payback":    [0.0] * n,
+        "category":       ["Debit"] * n,
+        "brand":          ["VisaDebit"] * n,
+        "is_dcc":         [False] * n,
+        "is_refund":      [False] * n,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Coverage tier unit tests
 # ---------------------------------------------------------------------------
@@ -182,3 +199,41 @@ def test_dcc_advantage_positive_at_185_percent():
     assert result.wl_dcc_cashback_annual == pytest.approx(0.10)
     assert result.dcc_advantage_annual   == pytest.approx(0.085)
     assert result.dcc_advantage_annual   > 0
+
+
+# ── Fee/volume dimensions for the Acquiring vs DCC split ──────────────────────
+
+def test_tier_b_exposes_fee_levels_andvolume_bases():
+    """The advantage split needs the fee level BEFORE cashback plus the DCC and
+    FX volume bases, all scaled by the same Tier-B factor."""
+    df = _flat_df([100.0, 100.0, 200.0])          # obs purchase volume 400
+    df["is_dcc"] = [True, False, True]
+    df["region"] = ["Intra", "Domestic", "Intra"]
+    df["dcc_payback"] = [0.80, 0.0, 1.60]
+
+    r = project_tier_b(df, PARAMS, OFFER, DCC_RATE, annual_volume=4_000.0)
+    scale = 4_000.0 / 400.0
+
+    assert r.acquiring_advantage_annual == pytest.approx(
+        r.wl_fee_annual - r.sp_fee_annual)
+    # Identity: net saving decomposes exactly into the two levers.
+    assert r.saving_annual == pytest.approx(
+        r.acquiring_advantage_annual + r.dcc_advantage_annual)
+    # Volume bases: net of refunds, scaled like every CHF metric.
+    assert r.dcc_volume_annual == pytest.approx(300.0 * scale)
+    assert r.fx_volume_annual == pytest.approx(300.0 * scale)
+
+
+def testvolume_bases_are_net_of_refunds():
+    """DCC/FX volume is a NET volume: a refund reduces it. This mirrors the
+    locked Davos anchors in validate.py -- do not switch to purchases-only."""
+    df = _flat_df([100.0, -40.0])
+    df["is_dcc"] = [True, True]
+    df["region"] = ["Intra", "Intra"]
+    df["is_refund"] = [False, True]
+
+    # Purchase volume (the Tier-B anchor) is 100; the refund only affects the
+    # volume bases, so scale stays 1.0 here.
+    r = project_tier_b(df, PARAMS, OFFER, DCC_RATE, annual_volume=100.0)
+    assert r.dcc_volume_annual == pytest.approx(60.0)
+    assert r.fx_volume_annual == pytest.approx(60.0)

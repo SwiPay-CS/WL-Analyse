@@ -495,9 +495,12 @@ def inject_css() -> None:
     .sp-card-label {{ font-size:.67rem; font-weight:700; letter-spacing:.05em;
       text-transform:uppercase; color:{INK_60}; white-space:nowrap;
       overflow:hidden; text-overflow:ellipsis; }}
-    .sp-card-value {{ font-size:1.45rem; font-weight:800; color:var(--anthrazit);
-      line-height:1.15; margin:.25rem 0 .1rem;
-      font-variant-numeric:tabular-nums; letter-spacing:-.01em; }}
+    /* Fluid size + nowrap: a KPI value like "CHF 70.32 Mio." must never break
+       mid-number in a customer meeting, but the cards sit in narrow columns. */
+    .sp-card-value {{ font-size:clamp(1.05rem, 1.75vw, 1.45rem); font-weight:800;
+      color:var(--anthrazit); line-height:1.15; margin:.25rem 0 .1rem;
+      white-space:nowrap; font-variant-numeric:tabular-nums;
+      letter-spacing:-.01em; }}
     .sp-card-foot {{ font-size:.76rem; color:{INK_60}; }}
 
     /* ── Section heading ── */

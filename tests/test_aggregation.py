@@ -132,3 +132,66 @@ def test_entity_with_volume_but_empty_df_falls_back_to_ist():
     result = aggregate([e], PARAMS, OFFER, DCC_RATE)
     assert result.skipped == ["Empty"]
     assert result.used == []
+
+
+# ── Vorteils-Zerlegung: Acquiring + DCC = Total ───────────────────────────────
+
+def _dcc_df(brutto: list[float]) -> pd.DataFrame:
+    """Like _df() but every row runs as DCC on a foreign clearing region, so
+    both cashback sides and the DCC/FX volume bases are non-zero."""
+    d = _df(brutto)
+    d["is_dcc"] = True
+    d["region"] = "Intra"
+    d["dcc_payback"] = [b * 0.008 for b in brutto]  # WL pays 0.8 %
+    return d
+
+
+def test_advantage_splits_exactly_into_acquiring_and_dcc_when_projected():
+    """saving = acquiring + dcc must hold to the cent -- it is an algebraic
+    identity (wl_net = wl_fee - wl_cb), not an approximation."""
+    e = EntityInput(
+        label="A", key="A", df=_dcc_df([100.0, 250.0, 400.0]),
+        annual_volume=15_000.0, ist_wl_net=0.0, ist_sp_net=0.0,
+        ist_dcc_adv=0.0, ist_txn=3.0, ist_brutto=750.0,
+    )
+    r = aggregate([e], PARAMS, OFFER, DCC_RATE)
+
+    assert r.saving_annual == pytest.approx(
+        r.acquiring_advantage_annual + r.dcc_advantage_annual)
+    assert r.acquiring_advantage_annual == pytest.approx(
+        r.wl_fee_annual - r.sp_fee_annual)
+    assert r.dcc_advantage_annual == pytest.approx(
+        r.sp_cashback_annual - r.wl_cashback_annual)
+    # SwiPay pays 1.4 % vs Worldline 0.8 % -> DCC leg is a gain, not a saving.
+    assert r.dcc_advantage_annual > 0
+    # Effective denominator = the projected annual volume.
+    assert r.brutto_annual == pytest.approx(15_000.0)
+    # Every row is DCC on a foreign region -> both bases equal the volume.
+    assert r.dcc_volume_annual == pytest.approx(15_000.0)
+    assert r.fx_volume_annual == pytest.approx(15_000.0)
+
+
+def test_advantage_split_holds_for_mixed_projected_and_ist_scope():
+    """A skipped entity contributes its Ist decomposition; the identity must
+    survive the mix of projected and Ist entities."""
+    projected = EntityInput(
+        label="P", key="P", df=_dcc_df([200.0, 300.0]), annual_volume=10_000.0,
+        ist_wl_net=0.0, ist_sp_net=0.0, ist_dcc_adv=0.0, ist_txn=2.0,
+        ist_brutto=500.0,
+    )
+    # Consistent Ist decomposition: wl_net = wl_fee - wl_cb, sp_net = sp_fee - sp_cb.
+    ist_only = EntityInput(
+        label="I", key="I", df=_df([50.0]), annual_volume=0.0,
+        ist_wl_net=9.0 - 2.0, ist_sp_net=6.0 - 3.0, ist_dcc_adv=3.0 - 2.0,
+        ist_txn=1.0, ist_brutto=50.0,
+        ist_wl_fee=9.0, ist_sp_fee=6.0, ist_wl_cashback=2.0, ist_sp_cashback=3.0,
+        ist_dcc_vol=50.0, ist_fx_vol=50.0,
+    )
+    r = aggregate([projected, ist_only], PARAMS, OFFER, DCC_RATE)
+
+    assert r.used == ["P"] and r.skipped == ["I"]
+    assert r.saving_annual == pytest.approx(
+        r.acquiring_advantage_annual + r.dcc_advantage_annual)
+    # Denominator mixes projected annual volume and the Ist entity's Umsatz.
+    assert r.brutto_annual == pytest.approx(10_000.0 + 50.0)
+    assert r.fx_volume_annual == pytest.approx(10_000.0 + 50.0)

@@ -23,7 +23,7 @@ import session_store
 import hochrechnung_store as hoch_store
 from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
-from projection import CoverageLabel
+from projection import CoverageLabel, volume_bases
 from aggregation import EntityInput, aggregate
 from db_groups import init_groups_db, get_groups, assign_group, unassign_group
 from reporter import build_pdf, build_csv
@@ -113,12 +113,7 @@ def _derive(fdf: pd.DataFrame, comp: pd.DataFrame, t: dict) -> dict:
     is_p = ~fdf["is_refund"]
     brutto = float(b[is_p].sum())
     n_p = int(is_p.sum())
-    dcc_vol = float(b[fdf["is_dcc"].to_numpy(bool)].sum()) if "is_dcc" in fdf else 0.0
-    if "region" in fdf.columns:
-        r = fdf["region"].astype(str).str.strip().str.lower()
-        fx_vol = float(b[(r != "domestic") & r.ne("nan")].sum())
-    else:
-        fx_vol = 0.0
+    dcc_vol, fx_vol = volume_bases(fdf)
     return {
         "brutto": brutto, "n_txn": len(fdf), "n_purch": n_p,
         "n_term": int(fdf["terminal_id"].nunique()) if "terminal_id" in fdf else 0,
@@ -127,6 +122,91 @@ def _derive(fdf: pd.DataFrame, comp: pd.DataFrame, t: dict) -> dict:
         "dcc_adv": t["sp_cashback"] - t["wl_cashback"],
         "dcc_vol": dcc_vol, "fx_vol": fx_vol,
     }
+
+
+# ── View-Modell: eine Quelle fuer alle KPIs und Charts ────────────────────────
+# Die Praesentation soll NIE Ist- und Jahreswerte mischen. Statt jede Kachel
+# und jedes Chart einzeln zu entscheiden, baut _view() genau EIN Zahlenpaket
+# -- entweder komplett hochgerechnet oder komplett Ist -- und alles darunter
+# liest nur noch daraus.
+
+_BASIS_PA  = "pa"
+_BASIS_IST = "ist"
+
+
+def _view(agg, t: dict, d: dict, basis: str) -> dict:
+    """Zahlenpaket fuer die Praesentation.
+
+    basis == _BASIS_PA  -> Jahreswerte aus der Hochrechnung (agg)
+    basis == _BASIS_IST -> Ist-Werte des gewaehlten Zeitraums (t/d)
+
+    Die Zerlegung ist in beiden Faellen exakt:
+        total = acquiring + dcc
+    weil wl_net = wl_fee - wl_cashback gilt (siehe engine.py). Kein Residuum,
+    keine Ruecklaufposition.
+    """
+    if basis == _BASIS_PA:
+        v = {
+            "basis": _BASIS_PA,
+            "suffix": "p.a.",
+            "note": "hochgerechnet",
+            "brutto": agg.brutto_annual,
+            "n_txn": agg.n_txn_annual,
+            "wl_fee": agg.wl_fee_annual, "sp_fee": agg.sp_fee_annual,
+            "wl_net": agg.wl_net_annual, "sp_net": agg.sp_net_annual,
+            "wl_cb": agg.wl_cashback_annual, "sp_cb": agg.sp_cashback_annual,
+            "acquiring": agg.acquiring_advantage_annual,
+            "dcc": agg.dcc_advantage_annual,
+            "total": agg.saving_annual,
+            "dcc_vol": agg.dcc_volume_annual,
+            "fx_vol": agg.fx_volume_annual,
+            "band_low": agg.band_low, "band_high": agg.band_high,
+        }
+    else:
+        v = {
+            "basis": _BASIS_IST,
+            "suffix": "im Zeitraum",
+            "note": "Ist-Werte",
+            "brutto": d["brutto"],
+            "n_txn": float(d["n_txn"]),
+            "wl_fee": t["wl_fee"], "sp_fee": t["sp_fee"],
+            "wl_net": t["wl_net"], "sp_net": t["sp_net"],
+            "wl_cb": t["wl_cashback"], "sp_cb": t["sp_cashback"],
+            "acquiring": t["wl_fee"] - t["sp_fee"],
+            "dcc": t["sp_cashback"] - t["wl_cashback"],
+            "total": t["wl_net"] - t["sp_net"],
+            "dcc_vol": d["dcc_vol"],
+            "fx_vol": d["fx_vol"],
+            "band_low": None, "band_high": None,
+        }
+
+    # Effektive Gebuehrenrate in Basispunkten vom Bruttoumsatz -- die Kennzahl,
+    # mit der ein Haendler Angebote vergleichen kann. Nur definiert, wenn es
+    # eine Umsatzbasis gibt (sonst None, nicht 0 -- lieber eine Luecke).
+    base = v["brutto"]
+    v["wl_bp"] = (v["wl_net"] / base * 10_000) if base else None
+    v["sp_bp"] = (v["sp_net"] / base * 10_000) if base else None
+    v["rel_pct"] = (v["total"] / abs(v["wl_net"]) * 100) if v["wl_net"] else 0.0
+    return v
+
+
+def _savings_by_type_scaled(entities, scales: list[float]) -> pd.DataFrame:
+    """Ersparnis nach Kartentyp, je Entity mit IHREM eigenen Hochrechnungs-
+    faktor skaliert (scales ist positionsgleich zur entities-Liste, siehe
+    aggregation.AggregateProjection.scales). Kein gemischter Durchschnitts-
+    faktor -- die Summe deckt sich mit agg.saving_annual."""
+    acc: dict[str, float] = {}
+    for e, scale in zip(entities, scales):
+        if e.df.empty:
+            continue
+        comp = run_comparison(e.df, params, offer, profile.dcc_pct)
+        types = [master.type_of(b) for b in e.df["brand"].astype(str)]
+        saving = (comp["wl_net"] - comp["sp_net"]).to_numpy(float) * scale
+        for typ, val in zip(types, saving):
+            lbl = _TYPE_LABEL.get(typ, "Spezial / n/a")
+            acc[lbl] = acc.get(lbl, 0.0) + float(val)
+    g = pd.DataFrame({"Typ": list(acc), "Ersparnis": list(acc.values())})
+    return g[g["Ersparnis"].abs() > 0.005] if not g.empty else g
 
 
 def _savings_by_type(fdf: pd.DataFrame, comp: pd.DataFrame) -> pd.DataFrame:
@@ -216,7 +296,7 @@ def page_praesentation() -> None:
     pid_col = "partner_id" if "partner_id" in df.columns else None
 
     # Selection row
-    c1, c2, c3 = st.columns([1.4, 1.4, 1])
+    c1, c2, c3 = st.columns([1.15, 1.75, 1.1])
     with c1:
         scope = st.radio("Auswahl", ["Alle", "Auswahl"], horizontal=True,
                          label_visibility="collapsed")
@@ -241,9 +321,6 @@ def page_praesentation() -> None:
                 label = ", ".join(sel_display)
             if not groups:
                 st.caption("Noch keine Gruppen — unter «Einstellungen → Merchants» anlegen.")
-    with c3:
-        st.caption("Hochrechnung hinterlegen: **Einstellungen → Merchants → "
-                  "Hochrechnung**. Wird hier automatisch übernommen.")
     frm = to = None
     if len(months) >= 2:
         frm, to = st.select_slider("Zeitraum", options=months,
@@ -289,7 +366,7 @@ def page_praesentation() -> None:
     t = engine_totals(comp)
     d = _derive(fdf, comp, t)
 
-    # ── HERO: Jahres-Ersparnis (Hochrechnung, aus Einstellungen übernommen) ───
+    # ── Hochrechnung aufbauen (aus Einstellungen übernommen) ──────────────────
     partner_vols = hoch_store.get_partner_volumes(DB_PATH)
     group_vols = hoch_store.get_group_volumes(DB_PATH)
     if scope == "Alle":
@@ -302,22 +379,43 @@ def page_praesentation() -> None:
     else:
         entities = []
     agg = aggregate(entities, params, offer, profile.dcc_pct)
+    has_proj = agg is not None and agg.has_projection
 
+    # Ansicht: p.a. ist der Standard, sobald eine Hochrechnung existiert. Der
+    # Umschalter bleibt erreichbar, damit die Rohbasis im Kundentermin
+    # nachvollziehbar ist -- ohne Hochrechnung gibt es nichts umzuschalten.
+    with c3:
+        if has_proj:
+            basis_lbl = st.radio(
+                "Ansicht", ["Hochrechnung p.a.", "Ist-Zeitraum"], horizontal=True,
+                label_visibility="collapsed", key="praes_basis")
+            basis = _BASIS_PA if basis_lbl.startswith("Hochrechnung") else _BASIS_IST
+        else:
+            basis = _BASIS_IST
+            st.caption("Keine Hochrechnung hinterlegt — **Einstellungen → "
+                       "Merchants → Hochrechnung**.")
+
+    v = _view(agg, t, d, basis)
+    acc_total = ui.GREEN if v["total"] >= 0 else ui.ROT
+
+    # ── HERO: geldwerter Vorteil ──────────────────────────────────────────────
     hcol, kcol = st.columns([1.15, 1])
     with hcol:
-        if agg is not None and agg.has_projection:
+        if basis == _BASIS_PA:
             cov = agg.coverage
-            headline = (agg.band_low if cov.label == CoverageLabel.INDICATIVE
-                        else agg.saving_annual)
-            acc = ui.GREEN if headline >= 0 else ui.ROT
+            # Bei indikativer Deckung führt das konservative Bandende, nicht
+            # der Punktwert -- lieber eine Lücke als eine zu schöne Zahl.
+            headline = (v["band_low"] if cov.label == CoverageLabel.INDICATIVE
+                        else v["total"])
             cov_txt = {CoverageLabel.SIMULATABLE: "hohe Deckung",
                        CoverageLabel.LOW_COVERAGE: "mittlere Deckung",
                        CoverageLabel.INDICATIVE: "indikativ"}[cov.label]
-            ui.hero("Ersparnis pro Jahr (Hochrechnung)", f"CHF {chf(headline, 0)}",
-                    band=f"Planungsband CHF {chf(agg.band_low, 0)} – {chf(agg.band_high, 0)}",
+            ui.hero("Geldwerter Vorteil pro Jahr", f"CHF {chf(headline, 0)}",
+                    band=f"Planungsband CHF {chf(v['band_low'], 0)} – "
+                         f"{chf(v['band_high'], 0)}",
                     foot=f"Deckungsgrad {cov.coverage_pct:.0%} · {cov_txt} · "
-                         f"DCC-Vorteil p.a. CHF {chf(agg.dcc_advantage_annual, 0)}",
-                    accent=acc)
+                         f"Basis Jahresumsatz CHF {chf(v['brutto'], 0)}",
+                    accent=ui.GREEN if headline >= 0 else ui.ROT)
             ui.coverage_banner(cov.label, cov.coverage_pct)
             n_total = len(agg.used) + len(agg.skipped)
             st.caption(
@@ -329,55 +427,84 @@ def page_praesentation() -> None:
                     f"Möglicher Fan-out: {', '.join(cluster)} haben denselben "
                     "Jahresumsatz hinterlegt — wird dennoch summiert. Bitte prüfen.")
         else:
-            acc = ui.GREEN if d["diff"] >= 0 else ui.ROT
-            ui.hero("Ersparnis im Zeitraum", f"CHF {chf(d['diff'], 0)}",
-                    foot="Keine Hochrechnung hinterlegt — siehe Einstellungen → "
-                         "Merchants → Hochrechnung.",
-                    accent=acc)
+            ui.hero("Geldwerter Vorteil im Zeitraum", f"CHF {chf(v['total'], 0)}",
+                    foot=(f"Ist-Werte {frm or '–'} bis {to or '–'} · "
+                          f"Bruttoumsatz CHF {chf(v['brutto'], 0)}"
+                          + ("" if has_proj else
+                             " · keine Hochrechnung hinterlegt")),
+                    accent=acc_total)
     with kcol:
-        rel = (d["diff"] / abs(t["wl_net"]) * 100) if t["wl_net"] else 0.0
         ui.kpi_row([
-            {"label": "Bruttoumsatz", "value": f"CHF {chf_c(d['brutto'])}", "accent": ui.BLUE},
-            {"label": "Gebühren-Red.", "value": f"{rel:.1f} %",
-             "foot": "vs. Worldline", "accent": ui.GREEN if rel >= 0 else ui.ROT},
+            {"label": f"Bruttoumsatz {v['suffix']}",
+             "value": f"CHF {chf_c(v['brutto'])}",
+             "foot": v["note"], "accent": ui.BLUE},
+            {"label": "Gebühren-Reduktion", "value": f"{v['rel_pct']:.1f} %",
+             "foot": "vs. Worldline",
+             "accent": ui.GREEN if v["rel_pct"] >= 0 else ui.ROT},
         ])
+        # Effektive Gebührenrate in Basispunkten -- vergleichbar mit jedem
+        # anderen Angebot, unabhängig von der Umsatzgrösse.
+        if v["wl_bp"] is not None:
+            # Richtung ausschreiben: ein nacktes "+8 bp" liest sich, als wäre
+            # SwiPay teurer, obwohl es die Ersparnis ist.
+            bp_delta = v["wl_bp"] - v["sp_bp"]
+            bp_foot = ("unverändert" if abs(bp_delta) < 0.5 else
+                       f"{bp_delta:.0f} bp günstiger" if bp_delta > 0 else
+                       f"{abs(bp_delta):.0f} bp teurer")
+            ui.kpi_row([
+                {"label": "Gebührenrate WL",
+                 "value": f"{v['wl_bp']:.0f} bp", "foot": "vom Bruttoumsatz",
+                 "accent": ui.ANTHRAZIT},
+                {"label": "Rate SwiPay",
+                 "value": f"{v['sp_bp']:.0f} bp", "foot": bp_foot,
+                 "accent": ui.GREEN if bp_delta >= 0 else ui.ROT},
+            ])
         ui.kpi_row([
-            {"label": "Transaktionen", "value": num(d["n_txn"]),
-             "foot": f"{num(d['n_purch'])} Käufe", "accent": ui.CYAN},
-            {"label": "DCC-Vorteil", "value": f"CHF {chf(d['dcc_adv'])}", "accent": ui.CYAN},
+            {"label": f"Transaktionen {v['suffix']}", "value": num(v["n_txn"]),
+             "foot": v["note"], "accent": ui.CYAN},
+            {"label": "Ø Ticket", "value": f"CHF {chf(d['avg_ticket'])}",
+             "foot": "aus dem Ist-Mix", "accent": ui.CYAN},
         ])
 
     # ── Ersparnis-Vergleich ───────────────────────────────────────────────────
-    ui.section("Ersparnis-Vergleich", "Worldline gegen SwiPay (netto)")
+    ui.section("Gebühren im Vergleich",
+               f"Worldline gegen SwiPay, netto · {v['note']} ({v['suffix']})")
     a, b = st.columns(2)
     with a:
-        st.altair_chart(ui.chart_fees_compare(t["wl_net"], t["sp_net"]),
+        st.altair_chart(ui.chart_fees_compare(v["wl_net"], v["sp_net"]),
                         use_container_width=True)
     with b:
-        sbt = _savings_by_type(fdf, comp)
+        # Nach Kartentyp: bei p.a. je Entity mit ihrem eigenen Faktor skaliert,
+        # damit die Summe exakt dem Hero-Wert entspricht.
+        sbt = (_savings_by_type_scaled(entities, agg.scales)
+               if basis == _BASIS_PA else _savings_by_type(fdf, comp))
         if not sbt.empty:
             st.altair_chart(ui.chart_savings_by_type(sbt), use_container_width=True)
         else:
             st.caption("Keine offerierbaren Brands mit Effekt in dieser Auswahl.")
 
     # ── DCC-Visualisierung ─────────────────────────────────────────────────────
-    ui.section("DCC", "Cashback & Fremdwährungs-Potenzial")
+    ui.section("DCC", f"Cashback & Fremdwährungs-Potenzial · {v['suffix']}")
     a, b = st.columns(2)
     with a:
-        st.altair_chart(ui.chart_dcc_compare(t["wl_cashback"], t["sp_cashback"]),
+        st.altair_chart(ui.chart_dcc_compare(v["wl_cb"], v["sp_cb"]),
                         use_container_width=True)
-        st.caption(f"WL-DCC-Ø { (t['wl_cashback']/d['dcc_vol']*100) if d['dcc_vol'] else 0:.2f} %"
-                   f" · SP-Satz {profile.dcc_pct*100:.2f} % vom genutzten DCC-Volumen "
-                   f"(CHF {chf(d['dcc_vol'])}).")
+        wl_dcc_rate = (v["wl_cb"] / v["dcc_vol"] * 100) if v["dcc_vol"] else 0.0
+        st.caption(f"WL-DCC-Ø {wl_dcc_rate:.2f} % · SP-Satz "
+                   f"{profile.dcc_pct*100:.2f} % vom genutzten DCC-Volumen "
+                   f"(CHF {chf(v['dcc_vol'])}).")
     with b:
-        st.altair_chart(ui.chart_dcc_potential(d["dcc_vol"], d["fx_vol"]),
+        st.altair_chart(ui.chart_dcc_potential(v["dcc_vol"], v["fx_vol"]),
                         use_container_width=True)
-        share = d["dcc_vol"] / d["fx_vol"] if d["fx_vol"] else 0.0
-        st.caption(f"Genutzt CHF {chf(d['dcc_vol'])} von DCC-fähigem Fremdwährungsvolumen "
-                   f"CHF {chf(d['fx_vol'])} ({share:.0%}).")
+        share = v["dcc_vol"] / v["fx_vol"] if v["fx_vol"] else 0.0
+        st.caption(f"Genutzt CHF {chf(v['dcc_vol'])} von DCC-fähigem "
+                   f"Fremdwährungsvolumen CHF {chf(v['fx_vol'])} ({share:.0%}).")
 
     # ── Zeit & Verteilung ──────────────────────────────────────────────────────
-    ui.section("Zeit & Verteilung", "Monatsverlauf, Transaktionsgrössen, Regionen")
+    # Bewusst immer Ist: ein Monatsverlauf lässt sich nicht hochrechnen, ohne
+    # eine Saisonalität zu erfinden, die die Daten nicht hergeben.
+    ui.section("Zeit & Verteilung",
+               "Monatsverlauf, Transaktionsgrössen, Regionen · immer Ist-Werte")
     mdf = _monthly(fdf, comp)
     if not mdf.empty and len(mdf) >= 2:
         a, b = st.columns([1.4, 1])
@@ -528,9 +655,15 @@ _MERCH_WIDTHS = [2.4, 1.3, 1.2, 1.0, 0.8, 1.1, 1.1, 1.0, 1.0]
 
 def _agg_merchant(sub: pd.DataFrame) -> dict:
     """One merchant's (or one group's) aggregate row. `sub` must already carry
-    wl_net/sp_net/wl_cb/sp_cb (see _with_comparison)."""
+    wl_net/sp_net/wl_cb/sp_cb/wl_fee/sp_fee (see _with_comparison).
+
+    The display keys (capitalised, e.g. "WL-Geb.") feed the Merchants table.
+    The underscore keys carry the Ist decomposition an EntityInput needs to
+    split its contribution into Acquiring vs DCC -- see _period_entity().
+    """
     pu = sub[~sub["is_refund"]]
     n = len(pu)
+    dcc_vol, fx_vol = volume_bases(sub)
     return {
         "Name": str(sub["partner_name"].iloc[0]) if "partner_name" in sub and n else "",
         "Umsatz": round(float(pu["brutto"].sum()), 2), "Txn": len(sub),
@@ -539,6 +672,12 @@ def _agg_merchant(sub: pd.DataFrame) -> dict:
         "SP-Geb.": round(float(sub["sp_net"].sum()), 2),
         "Diff.": round(float(sub["wl_net"].sum() - sub["sp_net"].sum()), 2),
         "DCC-Vtl.": round(float(sub["sp_cb"].sum() - sub["wl_cb"].sum()), 2),
+        "_wl_fee": float(sub["wl_fee"].sum()),
+        "_sp_fee": float(sub["sp_fee"].sum()),
+        "_wl_cb": float(sub["wl_cb"].sum()),
+        "_sp_cb": float(sub["sp_cb"].sum()),
+        "_dcc_vol": dcc_vol,
+        "_fx_vol": fx_vol,
     }
 
 
@@ -547,6 +686,8 @@ def _with_comparison(df_subset: pd.DataFrame) -> pd.DataFrame:
     out = df_subset.copy()
     out["wl_net"], out["sp_net"] = comp["wl_net"].values, comp["sp_net"].values
     out["wl_cb"], out["sp_cb"] = comp["wl_cashback"].values, comp["sp_cashback"].values
+    # Fee level BEFORE DCC cashback -- the Acquiring leg of the advantage.
+    out["wl_fee"], out["sp_fee"] = comp["wl_fee"].values, comp["sp_fee"].values
     return out
 
 
@@ -646,6 +787,9 @@ def _entity_from_row(r: dict, label: str, key: str, annual_volume: float) -> Ent
         label=label, key=key, df=r["_df"], annual_volume=annual_volume,
         ist_wl_net=r["WL-Geb."], ist_sp_net=r["SP-Geb."],
         ist_dcc_adv=r["DCC-Vtl."], ist_txn=r["Txn"], ist_brutto=r["Umsatz"],
+        ist_wl_fee=r.get("_wl_fee", 0.0), ist_sp_fee=r.get("_sp_fee", 0.0),
+        ist_wl_cashback=r.get("_wl_cb", 0.0), ist_sp_cashback=r.get("_sp_cb", 0.0),
+        ist_dcc_vol=r.get("_dcc_vol", 0.0), ist_fx_vol=r.get("_fx_vol", 0.0),
     )
 
 
@@ -656,7 +800,8 @@ def _period_entity(label: str, key: str, raw_df: pd.DataFrame, annual_volume: fl
     Aggregate und Tier-B-Projektionsbasis müssen denselben Zeitraum spiegeln."""
     pf = raw_df[_apply_period(raw_df, frm, to)]
     if pf.empty:
-        agg_row = {"WL-Geb.": 0.0, "SP-Geb.": 0.0, "DCC-Vtl.": 0.0, "Txn": 0, "Umsatz": 0.0}
+        agg_row = {"WL-Geb.": 0.0, "SP-Geb.": 0.0, "DCC-Vtl.": 0.0, "Txn": 0,
+                   "Umsatz": 0.0}
     else:
         agg_row = _agg_merchant(_with_comparison(pf))
     return EntityInput(
@@ -664,6 +809,12 @@ def _period_entity(label: str, key: str, raw_df: pd.DataFrame, annual_volume: fl
         ist_wl_net=agg_row["WL-Geb."], ist_sp_net=agg_row["SP-Geb."],
         ist_dcc_adv=agg_row["DCC-Vtl."], ist_txn=agg_row["Txn"],
         ist_brutto=agg_row["Umsatz"],
+        ist_wl_fee=agg_row.get("_wl_fee", 0.0),
+        ist_sp_fee=agg_row.get("_sp_fee", 0.0),
+        ist_wl_cashback=agg_row.get("_wl_cb", 0.0),
+        ist_sp_cashback=agg_row.get("_sp_cb", 0.0),
+        ist_dcc_vol=agg_row.get("_dcc_vol", 0.0),
+        ist_fx_vol=agg_row.get("_fx_vol", 0.0),
     )
 
 

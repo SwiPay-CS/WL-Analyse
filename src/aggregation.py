@@ -45,6 +45,15 @@ class EntityInput:
     ist_dcc_adv: float
     ist_txn: float
     ist_brutto: float       # Ist-Bruttoumsatz (Kaeufe) -- Nenner der Portfolio-Abdeckung
+    # Ist-Zerlegung. Default 0.0, damit bestehende Aufrufer (und Tests) ohne
+    # diese Dimensionen weiterlaufen; wird gebraucht, sobald eine Entity beim
+    # Ist bleibt und ihr Beitrag trotzdem in Acquiring/DCC aufgeteilt wird.
+    ist_wl_fee: float = 0.0        # Gebuehren VOR DCC-Cashback
+    ist_sp_fee: float = 0.0
+    ist_wl_cashback: float = 0.0
+    ist_sp_cashback: float = 0.0
+    ist_dcc_vol: float = 0.0       # genutztes DCC-Volumen (Kaeufe)
+    ist_fx_vol: float = 0.0        # DCC-faehiges Fremdwaehrungsvolumen (Kaeufe)
 
 
 @dataclass
@@ -62,9 +71,33 @@ class AggregateProjection:
     annual_volume_total: float        # Summe der hinterlegten Jahresumsaetze (Anzeige/PDF)
     portfolio_coverage_pct: float     # Ist-Anteil hochgerechnet, 0..1
 
+    # Zerlegung des Vorteils in seine zwei unabhaengigen Hebel. Es gilt exakt
+    #   saving_annual = acquiring_advantage_annual + dcc_advantage_annual
+    # weil jede Komponente linear ueber die Entities summiert (siehe Test).
+    wl_fee_annual: float = 0.0                  # Gebuehren VOR DCC-Cashback
+    sp_fee_annual: float = 0.0
+    acquiring_advantage_annual: float = 0.0     # wl_fee - sp_fee (gesparte Gebuehren)
+    wl_cashback_annual: float = 0.0
+    sp_cashback_annual: float = 0.0
+
+    # Effektive Umsatzbasis der obigen Betraege: hochgerechneter Jahresumsatz
+    # fuer projizierte Entities PLUS Ist-Bruttoumsatz fuer die uebernommenen.
+    # Das ist der einzig korrekte Nenner fuer eine effektive Gebuehrenrate,
+    # weil der Zaehler dieselbe Mischung enthaelt.
+    brutto_annual: float = 0.0
+    dcc_volume_annual: float = 0.0
+    fx_volume_annual: float = 0.0
+
     used: list[str] = field(default_factory=list)       # hochgerechnete Entities
     skipped: list[str] = field(default_factory=list)     # Ist uebernommen
     duplicate_groups: list[list[str]] = field(default_factory=list)  # Fan-out-Verdacht
+
+    # Skalierungsfaktor je Entity, POSITIONSGLEICH zur uebergebenen entities-
+    # Liste (1.0 = Ist uebernommen). Damit kann der Aufrufer beliebige eigene
+    # Aufschluesselungen (z.B. nach Kartentyp) exakt hochrechnen, statt einen
+    # gemischten Durchschnittsfaktor zu unterstellen -- jede Entity behaelt
+    # ihren eigenen Faktor.
+    scales: list[float] = field(default_factory=list)
 
     @property
     def has_projection(self) -> bool:
@@ -92,11 +125,14 @@ def aggregate(
         return None
 
     wl = sp = dcc_adv = txn = 0.0
+    wl_fee = sp_fee = wl_cb = sp_cb = 0.0
+    brutto_eff = dcc_vol = fx_vol = 0.0
     proj_saving = 0.0
     obs_vol_sum = ann_vol_sum = 0.0
     covered_brutto = total_brutto = 0.0
     used: list[str] = []
     skipped: list[str] = []
+    scales: list[float] = []
 
     for e in entities:
         total_brutto += e.ist_brutto
@@ -110,20 +146,41 @@ def aggregate(
                 proj = None
 
         if proj is not None:
+            scales.append(
+                proj.annual_volume / proj.observed_volume
+                if proj.observed_volume else 1.0)
             wl += proj.wl_net_annual
             sp += proj.sp_net_annual
             dcc_adv += proj.dcc_advantage_annual
             txn += proj.n_txn_annual
+            wl_fee += proj.wl_fee_annual
+            sp_fee += proj.sp_fee_annual
+            wl_cb += proj.wl_dcc_cashback_annual
+            sp_cb += proj.sp_dcc_cashback_annual
+            brutto_eff += proj.annual_volume
+            dcc_vol += proj.dcc_volume_annual
+            fx_vol += proj.fx_volume_annual
             proj_saving += proj.saving_annual
             obs_vol_sum += proj.observed_volume
             ann_vol_sum += proj.annual_volume
             covered_brutto += e.ist_brutto
             used.append(e.label)
         else:
+            scales.append(1.0)
+            # Keine Hochrechnung: das Ist geht unveraendert ein. Der Nenner
+            # (brutto_eff) waechst mit dem Ist-Umsatz, damit Zaehler und Nenner
+            # dieselbe Mischung tragen.
             wl += e.ist_wl_net
             sp += e.ist_sp_net
             dcc_adv += e.ist_dcc_adv
             txn += e.ist_txn
+            wl_fee += e.ist_wl_fee
+            sp_fee += e.ist_sp_fee
+            wl_cb += e.ist_wl_cashback
+            sp_cb += e.ist_sp_cashback
+            brutto_eff += e.ist_brutto
+            dcc_vol += e.ist_dcc_vol
+            fx_vol += e.ist_fx_vol
             skipped.append(e.label)
 
     saving = wl - sp
@@ -150,7 +207,16 @@ def aggregate(
         coverage=coverage,
         annual_volume_total=ann_vol_sum,
         portfolio_coverage_pct=portfolio_pct,
+        wl_fee_annual=wl_fee,
+        sp_fee_annual=sp_fee,
+        acquiring_advantage_annual=wl_fee - sp_fee,
+        wl_cashback_annual=wl_cb,
+        sp_cashback_annual=sp_cb,
+        brutto_annual=brutto_eff,
+        dcc_volume_annual=dcc_vol,
+        fx_volume_annual=fx_vol,
         used=used,
         skipped=skipped,
         duplicate_groups=_duplicate_clusters(entities),
+        scales=scales,
     )

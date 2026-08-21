@@ -99,6 +99,55 @@ class ProjectionResult:
     n_txn_observed: int = 0
     n_txn_annual: float = 0.0
 
+    # Fee level before DCC cashback, annual-scaled. Needed to split the
+    # advantage into its two independent levers:
+    #   acquiring_advantage = wl_fee - sp_fee        (fees saved)
+    #   dcc_advantage       = sp_cashback - wl_cashback  (extra cashback earned)
+    #   saving              = acquiring + dcc        (exact identity, no residual)
+    wl_fee_annual: float = 0.0
+    sp_fee_annual: float = 0.0
+    acquiring_advantage_annual: float = 0.0
+
+    # Volume bases for the DCC utilisation view, annual-scaled. Net of refunds
+    # -- the locked definition behind the Davos anchors (see volume_bases).
+    dcc_volume_annual: float = 0.0
+    fx_volume_annual: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Volume bases
+# ---------------------------------------------------------------------------
+
+def volume_bases(df) -> tuple[float, float]:
+    """(dcc_volume, fx_volume) in CHF -- net of refunds.
+
+    fx_volume is the DCC-eligible base: every non-domestic clearing region.
+    dcc_volume is the slice of it that actually ran as DCC.
+
+    Refunds are INCLUDED (signed), which makes both figures net volumes. That
+    is the locked definition behind the Davos anchors (validate.py: fx_vol
+    4'336'735.23, dcc_vol 905'721.92) and behind _derive() in app.py -- do not
+    switch to a purchases-only basis without re-agreeing those anchors.
+
+    Scaling a net volume by the purchase-volume-anchored Tier-B factor stays
+    proportional, so the projected figure keeps the same net semantics.
+    """
+    brutto = df["brutto"].to_numpy(float)
+
+    if "is_dcc" in df.columns:
+        dcc_vol = float(np.nansum(brutto[df["is_dcc"].to_numpy(bool)]))
+    else:
+        dcc_vol = 0.0
+
+    if "region" in df.columns:
+        r = df["region"].astype(str).str.strip().str.lower()
+        foreign = ((r != "domestic") & r.ne("nan")).to_numpy(bool)
+        fx_vol = float(np.nansum(brutto[foreign]))
+    else:
+        fx_vol = 0.0
+
+    return dcc_vol, fx_vol
+
 
 # ---------------------------------------------------------------------------
 # Tier B
@@ -134,6 +183,9 @@ def project_tier_b(
     saving = wl_net - sp_net
     wl_dcc = t["wl_cashback"] * scale
     sp_dcc = t["sp_cashback"] * scale
+    wl_fee = t["wl_fee"]      * scale
+    sp_fee = t["sp_fee"]      * scale
+    dcc_vol, fx_vol = volume_bases(df)
     n_txn_obs = len(df)
 
     coverage = CoverageTier.classify(obs_vol, annual_volume)
@@ -153,6 +205,11 @@ def project_tier_b(
         band_high=saving * (1 + _BAND_PCT),
         n_txn_observed=n_txn_obs,
         n_txn_annual=n_txn_obs * scale,
+        wl_fee_annual=wl_fee,
+        sp_fee_annual=sp_fee,
+        acquiring_advantage_annual=wl_fee - sp_fee,
+        dcc_volume_annual=dcc_vol * scale,
+        fx_volume_annual=fx_vol * scale,
     )
 
 
@@ -181,9 +238,13 @@ def project_tier_a(
     sp_net_v = comp["sp_net"].to_numpy(float)
     wl_cb_v  = comp["wl_cashback"].to_numpy(float)
     sp_cb_v  = comp["sp_cashback"].to_numpy(float)
+    wl_fee_v = comp["wl_fee"].to_numpy(float)
+    sp_fee_v = comp["sp_fee"].to_numpy(float)
 
     wl_net_total = sp_net_total = 0.0
     wl_dcc_total = sp_dcc_total = 0.0
+    wl_fee_total = sp_fee_total = 0.0
+    dcc_vol_total = fx_vol_total = 0.0
     total_obs_vol = total_ann_vol = 0.0
     n_txn_obs_total = 0
     n_txn_total = 0.0
@@ -219,7 +280,13 @@ def project_tier_a(
         sp_net_total += float(sp_net_v[b].sum()) * scale
         wl_dcc_total += float(wl_cb_v[b].sum()) * scale
         sp_dcc_total += float(sp_cb_v[b].sum()) * scale
+        wl_fee_total += float(wl_fee_v[b].sum()) * scale
+        sp_fee_total += float(sp_fee_v[b].sum()) * scale
         n_txn_total  += n_b * scale
+        # Volume bases scale per brand, same factor as that brand's CHF metrics.
+        b_dcc, b_fx = volume_bases(df[b])
+        dcc_vol_total += b_dcc * scale
+        fx_vol_total  += b_fx  * scale
 
     # Mix plausibility: compare share of brands that have annual data.
     total_ann_prov = sum(annual_by_brand.values()) or 1.0
@@ -255,4 +322,9 @@ def project_tier_a(
         mix_hints=mix_hints,
         n_txn_observed=n_txn_obs_total,
         n_txn_annual=n_txn_total,
+        wl_fee_annual=wl_fee_total,
+        sp_fee_annual=sp_fee_total,
+        acquiring_advantage_annual=wl_fee_total - sp_fee_total,
+        dcc_volume_annual=dcc_vol_total,
+        fx_volume_annual=fx_vol_total,
     )
