@@ -17,6 +17,11 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - Tests: uv run pytest
 - Nach einem Ordner-Umzug ist die .venv verbogen (hartkodierte Pfade → «Failed to
   spawn: streamlit»). Fix: rm -rf .venv && uv sync.
+- Änderungen in src/ werden von der laufenden Streamlit-Instanz NICHT neu
+  geladen (die Module hängen in sys.modules; nur app.py wird neu ausgeführt).
+  Neue oder umbenannte Funktionen in src/ ⇒ ImportError/AttributeError, bis der
+  Prozess neu startet. Also: Prozess killen und neu starten, nicht nur die
+  Seite neu laden.
 - Kundendaten liegen in data/ und sind gitignored. Nie committen.
 
 ## Arbeitsweise
@@ -70,6 +75,37 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
     "niedrige Deckung" (amber) und "indikativ" (rot), Farben synchron mit den
     PDF-Badges (reporter.py). Nie verstecken, auch bei schlechter Deckung —
     lieber eine Lücke als eine Lüge.
+- Vorteils-Zerlegung (Stand 2026-08-21): Der geldwerte Vorteil wird IMMER in
+  zwei Hebel zerlegt, nie als eine Zahl allein gezeigt:
+      Acquiring-Vorteil = wl_fee - sp_fee        (gesparte Gebühren)
+      DCC-Vorteil       = sp_cashback - wl_cashback  (höherer Cashback)
+      Total             = Acquiring + DCC        (exakte Identität)
+  Die Identität gilt algebraisch (wl_net = wl_fee - wl_cashback), nicht
+  näherungsweise — Residuum 0.0 auf dem Davos-Datensatz. Nie eine Restposition
+  einführen. Sprachlich getrennt halten: beim Acquiring SPART der Händler, beim
+  DCC BEKOMMT er mehr. Grün/Cyan bei Vorteil, Dunkelrot auf einem Bein, auf dem
+  SwiPay schlechter ist.
+- volume_bases() in projection.py ist die EINZIGE Definition von DCC- und
+  Fremdwährungsvolumen (Bildschirm, Projektion, PDF). Netto, also INKLUSIVE
+  Refunds — so sind die Davos-Anker gelockt (fx 4'336'735.23, dcc 905'721.92).
+  Nicht auf «nur Käufe» umstellen, ohne die Anker neu zu vereinbaren.
+- Präsentation-Ansicht: _view() in app.py baut EIN Zahlenpaket pro Rendering,
+  entweder komplett hochgerechnet oder komplett Ist. Jede Kachel und jedes
+  Chart liest nur daraus — nie Ist und p.a. mischen. Umschalter «Hochrechnung
+  p.a. / Ist-Zeitraum», p.a. ist Default sobald eine Hochrechnung existiert,
+  Umschalter fehlt wenn keine da ist. «Zeit & Verteilung» bleibt bewusst immer
+  Ist (ein Monatsverlauf lässt sich nicht hochrechnen, ohne Saisonalität zu
+  erfinden) und sagt das im Untertitel.
+- Aufschlüsselungen (z. B. nach Kartentyp) werden je Entity mit IHREM eigenen
+  Faktor skaliert (aggregation.AggregateProjection.scales), nie mit einem
+  gemischten Durchschnittsfaktor — sonst deckt sich die Summe nicht mit dem
+  Hero-Wert.
+- DCC-Potenzial: «Cashback bei 100 %» ist eine theoretische Obergrenze, keine
+  Prognose, und muss so benannt bleiben. Daneben steht zwingend «DCC-Vorteil
+  bei 100 %» = (SP-Satz - WL-Ø-Satz) x Fremdwährungsvolumen, weil Worldline bei
+  höherer Ausschöpfung ebenfalls mehr Cashback zahlt. Ohne diese Kennzahl liest
+  der Händler das unrealisierte Cashback als Zusatzvorteil — das wäre eine
+  Lüge. Ohne DCC-Volumen ist der WL-Satz unbekannt: dann «–», nicht 0.
 - Fixkosten und IC-Cap-Feinlogik = Phase 6, optional, nur bei konkretem Bedarf.
 
 ## Harter Validierungs-Anker (Davos-Datensatz)
