@@ -54,6 +54,21 @@ HIST_LABELS = ["0–10", "10–50", "50–100", "100–200", "200–500", "500+"
 
 chf, num, pct, chf_c = ui.chf, ui.num, ui.pct, ui.chf_compact
 
+# Effective fee rates are quoted with three decimals -- see _view() for why two
+# would make the page contradict itself.
+RATE_DEC = 3
+
+
+def pct_rate(frac: float) -> str:
+    """A fee rate as a percentage of turnover, e.g. 0.007544 -> "0.754 %"."""
+    return f"{frac * 100:.{RATE_DEC}f} %"
+
+
+def pp(frac: float) -> str:
+    """A DIFFERENCE between two rates, in percentage points -- never "%", which
+    would read as a relative saving."""
+    return f"{frac * 100:.{RATE_DEC}f} %-Punkte"
+
 init_db(DB_PATH)
 init_groups_db(DB_PATH)
 hoch_store.init_hochrechnung_db(DB_PATH)
@@ -180,12 +195,19 @@ def _view(agg, t: dict, d: dict, basis: str) -> dict:
             "band_low": None, "band_high": None,
         }
 
-    # Effektive Gebuehrenrate in Basispunkten vom Bruttoumsatz -- die Kennzahl,
-    # mit der ein Haendler Angebote vergleichen kann. Nur definiert, wenn es
-    # eine Umsatzbasis gibt (sonst None, nicht 0 -- lieber eine Luecke).
+    # Effektive Gebuehrenrate als Anteil vom Bruttoumsatz -- die Kennzahl, mit
+    # der ein Haendler Angebote vergleicht. Nur definiert, wenn es eine
+    # Umsatzbasis gibt (sonst None, nicht 0 -- lieber eine Luecke).
+    #
+    # Anzeige mit DREI Dezimalen (RATE_DEC): bei zwei Dezimalen stehen 0.75 %
+    # und 0.67 % da, und 0.08 / 0.75 ergibt 10.7 % -- was der Kachel
+    # "Gebuehren-Reduktion" (11.3 %) widerspricht. Mit drei Dezimalen geht die
+    # Rechnung fuer den Leser auf: 0.085 / 0.754 = 11.3 %.
     base = v["brutto"]
-    v["wl_bp"] = (v["wl_net"] / base * 10_000) if base else None
-    v["sp_bp"] = (v["sp_net"] / base * 10_000) if base else None
+    v["wl_rate"] = (v["wl_net"] / base) if base else None
+    v["sp_rate"] = (v["sp_net"] / base) if base else None
+    v["rate_delta"] = ((v["wl_rate"] - v["sp_rate"])
+                       if v["wl_rate"] is not None else None)
     v["rel_pct"] = (v["total"] / abs(v["wl_net"]) * 100) if v["wl_net"] else 0.0
     return v
 
@@ -403,19 +425,21 @@ def page_praesentation() -> None:
     with hcol:
         if basis == _BASIS_PA:
             cov = agg.coverage
-            # Bei indikativer Deckung führt das konservative Bandende, nicht
-            # der Punktwert -- lieber eine Lücke als eine zu schöne Zahl.
-            headline = (v["band_low"] if cov.label == CoverageLabel.INDICATIVE
-                        else v["total"])
+            # Der Hero zeigt IMMER den errechneten Punktwert -- denselben, den
+            # die Detailkachel "Geldwerter Vorteil" und die Typ-Aufschlüsselung
+            # tragen. Frueher fuehrte bei indikativer Deckung das konservative
+            # Bandende, was oben und unten zwei verschiedene Zahlen ergab. Die
+            # Vorsicht steckt jetzt sichtbar im Planungsband und im
+            # Deckungs-Banner, nicht in einer stillen Ersetzung der Headline.
             cov_txt = {CoverageLabel.SIMULATABLE: "hohe Deckung",
                        CoverageLabel.LOW_COVERAGE: "mittlere Deckung",
                        CoverageLabel.INDICATIVE: "indikativ"}[cov.label]
-            ui.hero("Geldwerter Vorteil pro Jahr", f"CHF {chf(headline, 0)}",
+            ui.hero("Geldwerter Vorteil pro Jahr", f"CHF {chf(v['total'], 0)}",
                     band=f"Planungsband CHF {chf(v['band_low'], 0)} – "
                          f"{chf(v['band_high'], 0)}",
                     foot=f"Deckungsgrad {cov.coverage_pct:.0%} · {cov_txt} · "
                          f"Basis Jahresumsatz CHF {chf(v['brutto'], 0)}",
-                    accent=ui.GREEN if headline >= 0 else ui.ROT)
+                    accent=acc_total)
             ui.coverage_banner(cov.label, cov.coverage_pct)
             n_total = len(agg.used) + len(agg.skipped)
             st.caption(
@@ -442,22 +466,25 @@ def page_praesentation() -> None:
              "foot": "vs. Worldline",
              "accent": ui.GREEN if v["rel_pct"] >= 0 else ui.ROT},
         ])
-        # Effektive Gebührenrate in Basispunkten -- vergleichbar mit jedem
+        # Effektive Gebührenrate in % vom Umsatz -- vergleichbar mit jedem
         # anderen Angebot, unabhängig von der Umsatzgrösse.
-        if v["wl_bp"] is not None:
-            # Richtung ausschreiben: ein nacktes "+8 bp" liest sich, als wäre
+        if v["wl_rate"] is not None:
+            dlt = v["rate_delta"]
+            # Richtung ausschreiben: ein nacktes "+0.085" liest sich, als wäre
             # SwiPay teurer, obwohl es die Ersparnis ist.
-            bp_delta = v["wl_bp"] - v["sp_bp"]
-            bp_foot = ("unverändert" if abs(bp_delta) < 0.5 else
-                       f"{bp_delta:.0f} bp günstiger" if bp_delta > 0 else
-                       f"{abs(bp_delta):.0f} bp teurer")
+            # %-Punkte, nicht %: die Ratendifferenz und die relative
+            # Reduktion stehen nebeneinander und dürfen nicht dieselbe Einheit
+            # tragen, sonst liest man 0.085 als 8.5 % Ersparnis.
+            rate_foot = (
+                "gleiche Rate" if abs(dlt) < 5e-6 else
+                f"{pp(dlt)} günstiger ({-v['rel_pct']:.1f} %)" if dlt > 0 else
+                f"{pp(-dlt)} teurer (+{abs(v['rel_pct']):.1f} %)")
             ui.kpi_row([
-                {"label": "Gebührenrate WL",
-                 "value": f"{v['wl_bp']:.0f} bp", "foot": "vom Bruttoumsatz",
-                 "accent": ui.ANTHRAZIT},
-                {"label": "Rate SwiPay",
-                 "value": f"{v['sp_bp']:.0f} bp", "foot": bp_foot,
-                 "accent": ui.GREEN if bp_delta >= 0 else ui.ROT},
+                {"label": "Gebühren Total WL", "value": pct_rate(v["wl_rate"]),
+                 "foot": "vom Bruttoumsatz", "accent": ui.ANTHRAZIT},
+                {"label": "Gebühren Total SwiPay",
+                 "value": pct_rate(v["sp_rate"]), "foot": rate_foot,
+                 "accent": ui.GREEN if dlt >= 0 else ui.ROT},
             ])
         ui.kpi_row([
             {"label": f"Transaktionen {v['suffix']}", "value": num(v["n_txn"]),
@@ -492,22 +519,30 @@ def page_praesentation() -> None:
                   else "SwiPay wäre teurer — kein Vorteil"),
          "accent": acc_total},
     ])
-    a, b = st.columns([1.25, 1])
+    # Zwei Vergleiche statt eines Wasserfalls: links die Acquiring-Gebühren
+    # (was der Händler ZAHLT), rechts der DCC-Cashback (was er BEKOMMT). Beide
+    # Deltas sind exakt die zwei Kacheln darüber.
+    a, b = st.columns(2)
     with a:
         st.altair_chart(
-            ui.chart_advantage_waterfall(v["wl_net"], acq, dccv, v["sp_net"]),
+            ui.chart_compare(v["wl_fee"], v["sp_fee"],
+                             "Acquiring-Gebühren CHF", ui.ROT),
             use_container_width=True)
+        st.caption(
+            f"Gebühren vor DCC-Cashback: Worldline CHF {chf(v['wl_fee'], 0)} "
+            f"gegen SwiPay CHF {chf(v['sp_fee'], 0)} — "
+            + (f"**CHF {chf(acq, 0)} gespart**." if acq >= 0
+               else f"**CHF {chf(-acq, 0)} teurer**."))
     with b:
-        st.markdown(
-            f"<div class='sp-banner'>Von <b>CHF {chf(v['wl_net'], 0)}</b> "
-            f"Worldline-Netto­gebühren bleiben bei SwiPay "
-            f"<b>CHF {chf(v['sp_net'], 0)}</b>.<br><br>"
-            f"· Acquiring senkt die Gebühren um <b>CHF {chf(acq, 0)}</b><br>"
-            f"· DCC bringt <b>CHF {chf(dccv, 0)}</b> zusätzlichen Cashback<br><br>"
-            f"Zusammen <b>CHF {chf(tot, 0)}</b> "
-            f"{'zu Ihren Gunsten' if tot >= 0 else 'zu Ihren Lasten'} — "
-            f"{abs(v['rel_pct']):.1f} % der heutigen Gebührenlast.</div>",
-            unsafe_allow_html=True)
+        st.altair_chart(
+            ui.chart_compare(v["wl_cb"], v["sp_cb"], "DCC-Cashback CHF",
+                             ui.CYAN),
+            use_container_width=True)
+        st.caption(
+            f"Cashback aus DCC: Worldline CHF {chf(v['wl_cb'], 0)} gegen "
+            f"SwiPay CHF {chf(v['sp_cb'], 0)} — "
+            + (f"**CHF {chf(dccv, 0)} mehr**." if dccv >= 0
+               else f"**CHF {chf(-dccv, 0)} weniger**."))
 
     # ── Ersparnis nach Kartentyp ───────────────────────────────────────────────
     # Kein zweites WL-gegen-SwiPay-Balkenpaar mehr: der Wasserfall oben zeigt
@@ -588,8 +623,6 @@ def page_praesentation() -> None:
                       else "kein DCC-Volumen — WL-Satz unbekannt"),
              "accent": ui.GREEN if (dcc_adv_max or 0) >= 0 else ui.ROT},
         ])
-        st.altair_chart(ui.chart_dcc_compare(v["wl_cb"], v["sp_cb"]),
-                        use_container_width=True)
     st.caption(
         "«Cashback bei 100 %» rechnet den SwiPay-Satz auf das gesamte "
         "DCC-fähige Volumen — eine Obergrenze, keine Prognose: volle "

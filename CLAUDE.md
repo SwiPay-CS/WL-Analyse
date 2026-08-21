@@ -63,6 +63,11 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   - Deckungs-Labels >60 / 25–60 / <25 %, Planungsband ±15 % (siehe
     projection.py). Bei mehreren Entities im Scope bezieht sich der
     Deckungsgrad NUR auf die tatsächlich hochgerechneten Entities.
+  - Headline-Regel geändert 2026-08-21 (auf Nutzer-Entscheid): der Hero zeigt
+    IMMER den errechneten Punktwert, auch bei indikativer Deckung — nicht mehr
+    das konservative Bandende. Grund: oben stand sonst eine andere Zahl als in
+    der Detailkachel und der Typ-Aufschlüsselung. Die Vorsicht bleibt sichtbar,
+    aber explizit: Planungsband unter der Zahl plus Deckungs-Banner.
   - Portfolio-Abdeckung ist eine zweite, unabhängige Kennzahl: Anteil des
     Ist-Bruttoumsatzes im Scope, der überhaupt hochgerechnet wurde (sinkt,
     wenn viele Merchants/Gruppen im Scope keine Hochrechnung haben) — anders
@@ -100,6 +105,16 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   Faktor skaliert (aggregation.AggregateProjection.scales), nie mit einem
   gemischten Durchschnittsfaktor — sonst deckt sich die Summe nicht mit dem
   Hero-Wert.
+- Effektive Gebührenrate: als Prozent vom Bruttoumsatz, NICHT in Basispunkten,
+  mit drei Dezimalen (pct_rate()/RATE_DEC in app.py). Zwei Dezimalen ergäben
+  0.75 % und 0.67 %, und 0.08/0.75 = 10.7 % widerspräche der Kachel
+  «Gebühren-Reduktion» (11.3 %). Labels: «Gebühren Total WL» / «Gebühren Total
+  SwiPay». Eine Ratendifferenz ist in %-PUNKTEN auszuweisen (pp()), nie in %,
+  weil daneben die relative Reduktion in % steht.
+- «Woher der Vorteil kommt» zeigt zwei Vergleiche nebeneinander: links die
+  Acquiring-Gebühren (wl_fee gegen sp_fee, was der Händler ZAHLT), rechts den
+  DCC-Cashback (was er BEKOMMT). Beide Deltas sind exakt die zwei Kacheln
+  darüber. Kein Wasserfall, kein erklärender Textblock daneben.
 - DCC-Potenzial: «Cashback bei 100 %» ist eine theoretische Obergrenze, keine
   Prognose, und muss so benannt bleiben. Daneben steht zwingend «DCC-Vorteil
   bei 100 %» = (SP-Satz - WL-Ø-Satz) x Fremdwährungsvolumen, weil Worldline bei

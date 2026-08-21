@@ -56,10 +56,15 @@ def pct(v: float, dec: int = 2) -> str:
 
 
 def chf_compact(v: float) -> str:
-    """Compact CHF for KPI cards: millions as 'Mio.', thousands kept full."""
+    """Compact CHF for KPI cards: millions as 'Mio.', thousands kept full.
+
+    One decimal, not two: "CHF 70.32 Mio." overflowed the narrow KPI cards and
+    got clipped mid-word. The exact figure is always spelled out nearby (hero
+    foot, captions), so the card only needs the order of magnitude.
+    """
     a = abs(v)
     if a >= 1_000_000:
-        return f"{v / 1_000_000:.2f} Mio."
+        return f"{v / 1_000_000:.1f} Mio."
     return chf(v, 0)
 
 
@@ -255,14 +260,14 @@ def _base(ch: alt.Chart, height: int = 240) -> alt.Chart:
     )
 
 
-def chart_fees_compare(wl_net: float, sp_net: float) -> alt.Chart:
-    """Headline: Worldline vs SwiPay net fees as two bars."""
-    df = pd.DataFrame({
-        "Anbieter": ["Worldline", "SwiPay"],
-        "Gebühren": [wl_net, sp_net],
-    })
-    df["lbl"] = df["Gebühren"].map(lambda v: chf(v, 0))
-    lo, hi = min(0.0, wl_net, sp_net), max(0.0, wl_net, sp_net)
+def chart_compare(wl: float, sp: float, axis_title: str,
+                  sp_color: str = ROT) -> alt.Chart:
+    """Worldline gegen SwiPay als zwei Balken. Ein Bauplan fuer jedes Paar
+    (Gebuehren, Cashback, ...), damit die Seite nicht bei jedem Vergleich
+    anders aussieht. sp_color trennt Kosten (Rot) von Ertrag (Cyan)."""
+    df = pd.DataFrame({"Anbieter": ["Worldline", "SwiPay"], "Wert": [wl, sp]})
+    df["lbl"] = df["Wert"].map(lambda v: chf(v, 0))
+    lo, hi = min(0.0, wl, sp), max(0.0, wl, sp)
     pad = (hi - lo) * 0.18 or 1.0
     bars = (
         alt.Chart(df).mark_bar(size=56, cornerRadiusEnd=6)
@@ -270,16 +275,25 @@ def chart_fees_compare(wl_net: float, sp_net: float) -> alt.Chart:
             x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"],
                     scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5),
                     axis=alt.Axis(labelAngle=0, labelFontSize=12)),
-            y=alt.Y("Gebühren:Q", axis=_chf_axis("Netto-Gebühren CHF"),
+            y=alt.Y("Wert:Q", axis=_chf_axis(axis_title),
                     scale=alt.Scale(domain=[lo, hi + pad], nice=False)),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
-                domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, ROT]), legend=None),
+                domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, sp_color]),
+                legend=None),
         )
     )
     labels = bars.mark_text(dy=-10, clip=False, font=_FONT, fontWeight="bold",
                             color=ANTHRAZIT, fontSize=13).encode(
         text=alt.Text("lbl:N"))
     return _base(bars + labels)
+
+
+def chart_fees_compare(wl_net: float, sp_net: float) -> alt.Chart:
+    return chart_compare(wl_net, sp_net, "Netto-Gebühren CHF", ROT)
+
+
+def chart_dcc_compare(wl_cb: float, sp_cb: float) -> alt.Chart:
+    return chart_compare(wl_cb, sp_cb, "DCC-Cashback CHF", CYAN)
 
 
 def chart_savings_by_type(df: pd.DataFrame) -> alt.Chart:
@@ -306,66 +320,6 @@ def chart_savings_by_type(df: pd.DataFrame) -> alt.Chart:
     neg = base.transform_filter(alt.datum.Ersparnis < 0).mark_text(
         align="right", dx=-6, **txt).encode(y=yenc, x="Ersparnis:Q", text="lbl:N")
     return _base(bars + pos + neg, height=210)
-
-
-def chart_advantage_waterfall(wl_net: float, acquiring: float, dcc: float,
-                              sp_net: float) -> alt.Chart:
-    """Waterfall: Worldline netto -> Acquiring-Ersparnis -> DCC-Mehrertrag ->
-    SwiPay netto.
-
-    Rests on the exact identity wl_net - acquiring - dcc == sp_net, so the two
-    floating bars close the gap between the outer bars with no plug figure.
-    Signs are handled by the floating bars themselves: if SwiPay is worse on a
-    leg, that bar simply points the other way and turns dark red.
-    """
-    mid = wl_net - acquiring   # Zwischenstand nach der Acquiring-Ersparnis
-    order = ["Worldline", "Acquiring", "DCC", "SwiPay"]
-    rows = [
-        {"Schritt": "Worldline", "lo": 0.0, "hi": wl_net,
-         "farbe": ANTHRAZIT, "lbl": chf(wl_net, 0)},
-        {"Schritt": "Acquiring", "lo": min(mid, wl_net), "hi": max(mid, wl_net),
-         "farbe": GREEN if acquiring >= 0 else DUNKELROT,
-         "lbl": chf(acquiring, 0)},
-        {"Schritt": "DCC", "lo": min(sp_net, mid), "hi": max(sp_net, mid),
-         "farbe": CYAN if dcc >= 0 else DUNKELROT, "lbl": chf(dcc, 0)},
-        {"Schritt": "SwiPay", "lo": 0.0, "hi": sp_net,
-         "farbe": ROT, "lbl": chf(sp_net, 0)},
-    ]
-    df = pd.DataFrame(rows)
-    lo = min(0.0, float(df["lo"].min()))
-    hi = max(0.0, float(df["hi"].max()))
-    pad = (hi - lo) * 0.16 or 1.0
-
-    # Connector: waagrechte Linie vom Ende eines Schritts zum Anfang des
-    # naechsten, damit das Auge dem Abstieg folgt -- ohne die Linien wirken
-    # kleine Delta-Balken wie zufaellige Striche im Diagramm.
-    conn = pd.DataFrame([
-        {"von": "Worldline", "bis": "Acquiring", "y": wl_net},
-        {"von": "Acquiring", "bis": "DCC",       "y": mid},
-        {"von": "DCC",       "bis": "SwiPay",    "y": sp_net},
-    ])
-
-    xscale = alt.Scale(domain=order, paddingInner=0.42, paddingOuter=0.3)
-    xenc = alt.X("Schritt:N", title=None, sort=order, scale=xscale,
-                 axis=alt.Axis(labelAngle=0, labelFontSize=12))
-    base = alt.Chart(df)
-    yaxis = alt.Y("lo:Q", axis=_chf_axis("Netto-Gebühren CHF"),
-                  scale=alt.Scale(domain=[lo, hi + pad], nice=False))
-    bars = base.mark_bar(size=54, cornerRadius=4).encode(
-        x=xenc, y=yaxis, y2=alt.Y2("hi:Q"),
-        color=alt.Color("farbe:N", scale=None, legend=None),
-    )
-    rules = (alt.Chart(conn)
-             .mark_rule(strokeDash=[3, 3], color=INK_42, strokeWidth=1.5)
-             .encode(
-                 x=alt.X("von:N", sort=order, scale=xscale, title=None),
-                 x2=alt.X2("bis:N"),
-                 y=alt.Y("y:Q", scale=alt.Scale(domain=[lo, hi + pad],
-                                                nice=False), title=None)))
-    labels = base.mark_text(dy=-9, clip=False, font=_FONT, fontWeight="bold",
-                            color=ANTHRAZIT, fontSize=12).encode(
-        x=xenc, y=alt.Y("hi:Q"), text=alt.Text("lbl:N"))
-    return _base(rules + bars + labels, height=280)
 
 
 def chart_dcc_share(used: float, fx_total: float) -> alt.Chart:
@@ -400,28 +354,6 @@ def chart_dcc_share(used: float, fx_total: float) -> alt.Chart:
         strokeWidth=0).configure_legend(
         labelFont=_FONT, titleFont=_FONT, labelColor=ANTHRAZIT,
         titleColor=INK_60)
-
-
-def chart_dcc_compare(wl_cb: float, sp_cb: float) -> alt.Chart:
-    df = pd.DataFrame({"Anbieter": ["Worldline", "SwiPay"], "Cashback": [wl_cb, sp_cb]})
-    df["lbl"] = df["Cashback"].map(lambda v: chf(v, 0))
-    hi = max(0.0, wl_cb, sp_cb)
-    bars = (
-        alt.Chart(df).mark_bar(size=56, cornerRadiusEnd=6)
-        .encode(
-            x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"],
-                    scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5),
-                    axis=alt.Axis(labelAngle=0, labelFontSize=12)),
-            y=alt.Y("Cashback:Q", axis=_chf_axis("DCC-Cashback CHF"),
-                    scale=alt.Scale(domain=[0, hi * 1.18 or 1.0], nice=False)),
-            color=alt.Color("Anbieter:N", scale=alt.Scale(
-                domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, CYAN]), legend=None),
-        )
-    )
-    labels = bars.mark_text(dy=-10, clip=False, font=_FONT, fontWeight="bold",
-                            color=ANTHRAZIT, fontSize=13).encode(
-        text=alt.Text("lbl:N"))
-    return _base(bars + labels)
 
 
 def chart_dcc_potential(used: float, fx_total: float) -> alt.Chart:
@@ -588,12 +520,14 @@ def inject_css() -> None:
       position:relative; overflow:hidden; height:100%; }}
     .sp-card::after {{ content:""; position:absolute; top:0; right:0; width:4px;
       height:100%; background:var(--acc); opacity:.85; }}
+    /* Wrap, never ellipsis: a truncated "BRUTTOUMSATZ ..." hides which basis
+       the number is on, which is exactly what must stay readable. */
     .sp-card-label {{ font-size:.67rem; font-weight:700; letter-spacing:.05em;
-      text-transform:uppercase; color:{INK_60}; white-space:nowrap;
-      overflow:hidden; text-overflow:ellipsis; }}
+      text-transform:uppercase; color:{INK_60}; line-height:1.3;
+      min-height:1.74em; }}
     /* Fluid size + nowrap: a KPI value like "CHF 70.32 Mio." must never break
        mid-number in a customer meeting, but the cards sit in narrow columns. */
-    .sp-card-value {{ font-size:clamp(1.05rem, 1.75vw, 1.45rem); font-weight:800;
+    .sp-card-value {{ font-size:clamp(.92rem, 1.6vw, 1.45rem); font-weight:800;
       color:var(--anthrazit); line-height:1.15; margin:.25rem 0 .1rem;
       white-space:nowrap; font-variant-numeric:tabular-nums;
       letter-spacing:-.01em; }}
