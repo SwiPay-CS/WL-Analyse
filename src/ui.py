@@ -268,7 +268,8 @@ def chart_fees_compare(wl_net: float, sp_net: float) -> alt.Chart:
         alt.Chart(df).mark_bar(size=56, cornerRadiusEnd=6)
         .encode(
             x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"],
-                    scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5)),
+                    scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5),
+                    axis=alt.Axis(labelAngle=0, labelFontSize=12)),
             y=alt.Y("Gebühren:Q", axis=_chf_axis("Netto-Gebühren CHF"),
                     scale=alt.Scale(domain=[lo, hi + pad], nice=False)),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
@@ -307,6 +308,100 @@ def chart_savings_by_type(df: pd.DataFrame) -> alt.Chart:
     return _base(bars + pos + neg, height=210)
 
 
+def chart_advantage_waterfall(wl_net: float, acquiring: float, dcc: float,
+                              sp_net: float) -> alt.Chart:
+    """Waterfall: Worldline netto -> Acquiring-Ersparnis -> DCC-Mehrertrag ->
+    SwiPay netto.
+
+    Rests on the exact identity wl_net - acquiring - dcc == sp_net, so the two
+    floating bars close the gap between the outer bars with no plug figure.
+    Signs are handled by the floating bars themselves: if SwiPay is worse on a
+    leg, that bar simply points the other way and turns dark red.
+    """
+    mid = wl_net - acquiring   # Zwischenstand nach der Acquiring-Ersparnis
+    order = ["Worldline", "Acquiring", "DCC", "SwiPay"]
+    rows = [
+        {"Schritt": "Worldline", "lo": 0.0, "hi": wl_net,
+         "farbe": ANTHRAZIT, "lbl": chf(wl_net, 0)},
+        {"Schritt": "Acquiring", "lo": min(mid, wl_net), "hi": max(mid, wl_net),
+         "farbe": GREEN if acquiring >= 0 else DUNKELROT,
+         "lbl": chf(acquiring, 0)},
+        {"Schritt": "DCC", "lo": min(sp_net, mid), "hi": max(sp_net, mid),
+         "farbe": CYAN if dcc >= 0 else DUNKELROT, "lbl": chf(dcc, 0)},
+        {"Schritt": "SwiPay", "lo": 0.0, "hi": sp_net,
+         "farbe": ROT, "lbl": chf(sp_net, 0)},
+    ]
+    df = pd.DataFrame(rows)
+    lo = min(0.0, float(df["lo"].min()))
+    hi = max(0.0, float(df["hi"].max()))
+    pad = (hi - lo) * 0.16 or 1.0
+
+    # Connector: waagrechte Linie vom Ende eines Schritts zum Anfang des
+    # naechsten, damit das Auge dem Abstieg folgt -- ohne die Linien wirken
+    # kleine Delta-Balken wie zufaellige Striche im Diagramm.
+    conn = pd.DataFrame([
+        {"von": "Worldline", "bis": "Acquiring", "y": wl_net},
+        {"von": "Acquiring", "bis": "DCC",       "y": mid},
+        {"von": "DCC",       "bis": "SwiPay",    "y": sp_net},
+    ])
+
+    xscale = alt.Scale(domain=order, paddingInner=0.42, paddingOuter=0.3)
+    xenc = alt.X("Schritt:N", title=None, sort=order, scale=xscale,
+                 axis=alt.Axis(labelAngle=0, labelFontSize=12))
+    base = alt.Chart(df)
+    yaxis = alt.Y("lo:Q", axis=_chf_axis("Netto-Gebühren CHF"),
+                  scale=alt.Scale(domain=[lo, hi + pad], nice=False))
+    bars = base.mark_bar(size=54, cornerRadius=4).encode(
+        x=xenc, y=yaxis, y2=alt.Y2("hi:Q"),
+        color=alt.Color("farbe:N", scale=None, legend=None),
+    )
+    rules = (alt.Chart(conn)
+             .mark_rule(strokeDash=[3, 3], color=INK_42, strokeWidth=1.5)
+             .encode(
+                 x=alt.X("von:N", sort=order, scale=xscale, title=None),
+                 x2=alt.X2("bis:N"),
+                 y=alt.Y("y:Q", scale=alt.Scale(domain=[lo, hi + pad],
+                                                nice=False), title=None)))
+    labels = base.mark_text(dy=-9, clip=False, font=_FONT, fontWeight="bold",
+                            color=ANTHRAZIT, fontSize=12).encode(
+        x=xenc, y=alt.Y("hi:Q"), text=alt.Text("lbl:N"))
+    return _base(rules + bars + labels, height=280)
+
+
+def chart_dcc_share(used: float, fx_total: float) -> alt.Chart:
+    """Donut: welcher Anteil des DCC-fähigen Fremdwährungsvolumens tatsächlich
+    als DCC läuft. Prozentwerte stehen im Chart, nicht nur in der Legende."""
+    rest = max(fx_total - used, 0.0)
+    total = used + rest
+    df = pd.DataFrame({
+        "Segment": ["DCC genutzt", "Nicht genutzt"],
+        "Volumen": [used, rest],
+        "order": [0, 1],
+    })
+    df["Anteil"] = df["Volumen"] / total if total else 0.0
+    df["lbl"] = df["Anteil"].map(lambda x: f"{x:.0%}")
+
+    theta = alt.Theta("Volumen:Q", stack=True, sort=None)
+    color = alt.Color("Segment:N", sort=["DCC genutzt", "Nicht genutzt"],
+                      scale=alt.Scale(domain=["DCC genutzt", "Nicht genutzt"],
+                                      range=[CYAN, "#d9d2c9"]),
+                      legend=alt.Legend(orient="bottom", title=None,
+                                        labelLimit=200))
+    base = alt.Chart(df).encode(theta=theta, order=alt.Order("order:Q"))
+    arc = base.mark_arc(innerRadius=52, outerRadius=86, stroke=WHITE,
+                        strokeWidth=2).encode(color=color)
+    # Prozent nur beschriften, wo das Segment gross genug ist, damit sich die
+    # Labels bei kleinem Anteil nicht ueberlappen.
+    txt = (base.transform_filter(alt.datum.Anteil >= 0.06)
+           .mark_text(radius=106, font=_FONT, fontSize=13, fontWeight="bold",
+                      color=ANTHRAZIT)
+           .encode(text=alt.Text("lbl:N")))
+    return (arc + txt).properties(height=270).configure_view(
+        strokeWidth=0).configure_legend(
+        labelFont=_FONT, titleFont=_FONT, labelColor=ANTHRAZIT,
+        titleColor=INK_60)
+
+
 def chart_dcc_compare(wl_cb: float, sp_cb: float) -> alt.Chart:
     df = pd.DataFrame({"Anbieter": ["Worldline", "SwiPay"], "Cashback": [wl_cb, sp_cb]})
     df["lbl"] = df["Cashback"].map(lambda v: chf(v, 0))
@@ -315,7 +410,8 @@ def chart_dcc_compare(wl_cb: float, sp_cb: float) -> alt.Chart:
         alt.Chart(df).mark_bar(size=56, cornerRadiusEnd=6)
         .encode(
             x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"],
-                    scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5)),
+                    scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5),
+                    axis=alt.Axis(labelAngle=0, labelFontSize=12)),
             y=alt.Y("Cashback:Q", axis=_chf_axis("DCC-Cashback CHF"),
                     scale=alt.Scale(domain=[0, hi * 1.18 or 1.0], nice=False)),
             color=alt.Color("Anbieter:N", scale=alt.Scale(

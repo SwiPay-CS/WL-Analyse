@@ -466,39 +466,138 @@ def page_praesentation() -> None:
              "foot": "aus dem Ist-Mix", "accent": ui.CYAN},
         ])
 
-    # ── Ersparnis-Vergleich ───────────────────────────────────────────────────
-    ui.section("Gebühren im Vergleich",
-               f"Worldline gegen SwiPay, netto · {v['note']} ({v['suffix']})")
-    a, b = st.columns(2)
+    # ── Woher der Vorteil kommt ───────────────────────────────────────────────
+    # Zwei getrennte Hebel, bewusst unterschiedlich benannt: beim Acquiring
+    # SPART der Händler Gebühren, beim DCC BEKOMMT er mehr Cashback. Erst die
+    # Summe ist der geldwerte Vorteil.
+    ui.section("Woher der Vorteil kommt",
+               f"Acquiring + DCC = geldwerter Vorteil · {v['note']} "
+               f"({v['suffix']})")
+    acq, dccv, tot = v["acquiring"], v["dcc"], v["total"]
+    share = (lambda x: f"{x / tot:.0%} des Vorteils") if tot else (lambda x: "")
+    ui.kpi_row([
+        {"label": f"Acquiring-Ersparnis {v['suffix']}",
+         "value": f"CHF {chf(acq, 0)}",
+         "foot": ("gesparte Gebühren · " + share(acq)) if acq >= 0
+                 else "höhere Gebühren als Worldline",
+         "accent": ui.GREEN if acq >= 0 else ui.ROT},
+        {"label": f"DCC-Mehrertrag {v['suffix']}",
+         "value": f"CHF {chf(dccv, 0)}",
+         "foot": ("höherer Cashback · " + share(dccv)) if dccv >= 0
+                 else "geringerer Cashback als Worldline",
+         "accent": ui.CYAN if dccv >= 0 else ui.ROT},
+        {"label": f"Geldwerter Vorteil {v['suffix']}",
+         "value": f"CHF {chf(tot, 0)}",
+         "foot": ("Acquiring + DCC" if tot >= 0
+                  else "SwiPay wäre teurer — kein Vorteil"),
+         "accent": acc_total},
+    ])
+    a, b = st.columns([1.25, 1])
     with a:
-        st.altair_chart(ui.chart_fees_compare(v["wl_net"], v["sp_net"]),
-                        use_container_width=True)
+        st.altair_chart(
+            ui.chart_advantage_waterfall(v["wl_net"], acq, dccv, v["sp_net"]),
+            use_container_width=True)
     with b:
-        # Nach Kartentyp: bei p.a. je Entity mit ihrem eigenen Faktor skaliert,
-        # damit die Summe exakt dem Hero-Wert entspricht.
-        sbt = (_savings_by_type_scaled(entities, agg.scales)
-               if basis == _BASIS_PA else _savings_by_type(fdf, comp))
-        if not sbt.empty:
-            st.altair_chart(ui.chart_savings_by_type(sbt), use_container_width=True)
-        else:
-            st.caption("Keine offerierbaren Brands mit Effekt in dieser Auswahl.")
+        st.markdown(
+            f"<div class='sp-banner'>Von <b>CHF {chf(v['wl_net'], 0)}</b> "
+            f"Worldline-Netto­gebühren bleiben bei SwiPay "
+            f"<b>CHF {chf(v['sp_net'], 0)}</b>.<br><br>"
+            f"· Acquiring senkt die Gebühren um <b>CHF {chf(acq, 0)}</b><br>"
+            f"· DCC bringt <b>CHF {chf(dccv, 0)}</b> zusätzlichen Cashback<br><br>"
+            f"Zusammen <b>CHF {chf(tot, 0)}</b> "
+            f"{'zu Ihren Gunsten' if tot >= 0 else 'zu Ihren Lasten'} — "
+            f"{abs(v['rel_pct']):.1f} % der heutigen Gebührenlast.</div>",
+            unsafe_allow_html=True)
 
-    # ── DCC-Visualisierung ─────────────────────────────────────────────────────
-    ui.section("DCC", f"Cashback & Fremdwährungs-Potenzial · {v['suffix']}")
-    a, b = st.columns(2)
+    # ── Ersparnis nach Kartentyp ───────────────────────────────────────────────
+    # Kein zweites WL-gegen-SwiPay-Balkenpaar mehr: der Wasserfall oben zeigt
+    # dieselben zwei Aussenwerte bereits. Hier nur die Aufschlüsselung.
+    ui.section("Ersparnis nach Kartentyp",
+               f"Wo der Vorteil entsteht · {v['note']} ({v['suffix']})")
+    # Bei p.a. je Entity mit IHREM Faktor skaliert, damit die Summe exakt dem
+    # Wert im Hero entspricht.
+    sbt = (_savings_by_type_scaled(entities, agg.scales)
+           if basis == _BASIS_PA else _savings_by_type(fdf, comp))
+    if not sbt.empty:
+        a, b = st.columns([1.6, 1])
+        with a:
+            st.altair_chart(ui.chart_savings_by_type(sbt),
+                            use_container_width=True)
+        with b:
+            rows = sbt.sort_values("Ersparnis", ascending=False)
+            items = "".join(
+                f"<div style='display:flex;justify-content:space-between;"
+                f"gap:1rem;padding:.3rem 0;border-bottom:1px solid "
+                f"rgba(62,75,76,.09)'><span>{r.Typ}</span>"
+                f"<b>CHF {chf(r.Ersparnis, 0)}</b></div>"
+                for r in rows.itertuples())
+            st.markdown(
+                f"<div class='sp-banner'>{items}"
+                f"<div style='display:flex;justify-content:space-between;"
+                f"gap:1rem;padding:.5rem 0 0'><span><b>Summe</b></span>"
+                f"<b>CHF {chf(float(sbt['Ersparnis'].sum()), 0)}</b></div>"
+                "</div>", unsafe_allow_html=True)
+        st.caption("Nicht offerierbare Brands (z. B. TWINT) erscheinen bewusst "
+                   "mit Null-Effekt — dort ändert SwiPay nichts.")
+    else:
+        st.caption("Keine offerierbaren Brands mit Effekt in dieser Auswahl.")
+
+    # ── DCC ───────────────────────────────────────────────────────────────────
+    ui.section("DCC", f"Cashback heute und Ausschöpfungs-Potenzial · {v['suffix']}")
+    dcc_share = (v["dcc_vol"] / v["fx_vol"]) if v["fx_vol"] else 0.0
+    # Obergrenze: derselbe SwiPay-Satz auf das GANZE DCC-fähige Volumen. Das
+    # ist eine theoretische Grenze, keine Prognose -- 100 % Ausschöpfung setzt
+    # voraus, dass jeder Karteninhaber DCC annimmt. Wird als solche benannt.
+    cb_max = profile.dcc_pct * v["fx_vol"]
+    cb_head = cb_max - v["sp_cb"]
+    # Bei hoeherer Ausschoepfung zahlt WORLDLINE ebenfalls mehr Cashback. Der
+    # Vorteil waechst deshalb nur um die Satzdifferenz, nicht um den ganzen
+    # Cashback -- sonst waere die Zahl im Kundentermin eine Luege. Ohne
+    # DCC-Volumen ist der WL-Satz unbekannt: dann None, nicht 0.
+    wl_dcc_rate = (v["wl_cb"] / v["dcc_vol"]) if v["dcc_vol"] else None
+    dcc_adv_max = ((profile.dcc_pct - wl_dcc_rate) * v["fx_vol"]
+                   if wl_dcc_rate is not None else None)
+    a, b = st.columns([1, 1.35])
     with a:
+        st.altair_chart(ui.chart_dcc_share(v["dcc_vol"], v["fx_vol"]),
+                        use_container_width=True)
+        st.caption(f"{dcc_share:.0%} des DCC-fähigen Fremdwährungsvolumens "
+                   f"laufen heute als DCC: CHF {chf(v['dcc_vol'], 0)} von "
+                   f"CHF {chf(v['fx_vol'], 0)}.")
+    with b:
+        ui.kpi_row([
+            {"label": f"Cashback SwiPay {v['suffix']}",
+             "value": f"CHF {chf(v['sp_cb'], 0)}",
+             "foot": f"{profile.dcc_pct*100:.2f} % auf {dcc_share:.0%} "
+                     "Ausschöpfung", "accent": ui.CYAN},
+            {"label": "Cashback bei 100 %",
+             "value": f"CHF {chf(cb_max, 0)}",
+             "foot": "theoretische Obergrenze", "accent": ui.BLUE},
+        ])
+        ui.kpi_row([
+            {"label": "Unrealisiertes Cashback",
+             "value": f"CHF {chf(cb_head, 0)}",
+             "foot": f"bei voller Ausschöpfung (+{1 - dcc_share:.0%} Volumen)",
+             "accent": ui.ORANGE},
+            {"label": "DCC-Vorteil bei 100 %",
+             "value": (f"CHF {chf(dcc_adv_max, 0)}"
+                       if dcc_adv_max is not None else "–"),
+             "foot": (f"heute CHF {chf(dccv, 0)} · Satzdifferenz "
+                      f"{(profile.dcc_pct - wl_dcc_rate) * 100:+.2f} pp"
+                      if dcc_adv_max is not None
+                      else "kein DCC-Volumen — WL-Satz unbekannt"),
+             "accent": ui.GREEN if (dcc_adv_max or 0) >= 0 else ui.ROT},
+        ])
         st.altair_chart(ui.chart_dcc_compare(v["wl_cb"], v["sp_cb"]),
                         use_container_width=True)
-        wl_dcc_rate = (v["wl_cb"] / v["dcc_vol"] * 100) if v["dcc_vol"] else 0.0
-        st.caption(f"WL-DCC-Ø {wl_dcc_rate:.2f} % · SP-Satz "
-                   f"{profile.dcc_pct*100:.2f} % vom genutzten DCC-Volumen "
-                   f"(CHF {chf(v['dcc_vol'])}).")
-    with b:
-        st.altair_chart(ui.chart_dcc_potential(v["dcc_vol"], v["fx_vol"]),
-                        use_container_width=True)
-        share = v["dcc_vol"] / v["fx_vol"] if v["fx_vol"] else 0.0
-        st.caption(f"Genutzt CHF {chf(v['dcc_vol'])} von DCC-fähigem "
-                   f"Fremdwährungsvolumen CHF {chf(v['fx_vol'])} ({share:.0%}).")
+    st.caption(
+        "«Cashback bei 100 %» rechnet den SwiPay-Satz auf das gesamte "
+        "DCC-fähige Volumen — eine Obergrenze, keine Prognose: volle "
+        "Ausschöpfung setzt voraus, dass jeder Karteninhaber DCC annimmt. "
+        "Wichtig für den Vergleich: bei höherer Ausschöpfung zahlt Worldline "
+        "ebenfalls mehr Cashback. Der **Vorteil** gegenüber Worldline wächst "
+        "deshalb nur mit der Satzdifferenz — das ist die Kennzahl "
+        "«DCC-Vorteil bei 100 %», nicht das unrealisierte Cashback-Potenzial.")
 
     # ── Zeit & Verteilung ──────────────────────────────────────────────────────
     # Bewusst immer Ist: ein Monatsverlauf lässt sich nicht hochrechnen, ohne
