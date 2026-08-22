@@ -114,8 +114,20 @@ class ViewNumbers:
 
     @property
     def wl_processing_rate(self) -> float | None:
-        """Ø Processing-Fee-Satz von Worldline -- das Gegenstueck zur ASF."""
+        """Ø ASF-Satz von Worldline. Worldline nennt diese Komponente
+        "Processing Fee", gemeint ist dasselbe -- im Kundentermin heisst beides
+        ASF, damit der Vergleich lesbar bleibt."""
         return (self.wl_processing / self.brutto) if self.brutto else None
+
+    @property
+    def asf_change_pct(self) -> float | None:
+        """Veraenderung der ASF in Prozent, gleiche Konvention wie
+        fee_change_pct: negativ = SwiPays ASF ist guenstiger. None, wenn
+        Worldline keine ASF-Basis hat (dann ist die Relation undefiniert --
+        lieber eine Luecke als eine 0)."""
+        if not self.wl_processing:
+            return None
+        return (self.sp_asf - self.wl_processing) / abs(self.wl_processing) * 100
 
     @property
     def dcc_share(self) -> float:

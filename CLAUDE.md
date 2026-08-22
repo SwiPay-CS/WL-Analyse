@@ -175,8 +175,14 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   auf der ZAHL (ui.kpi_row akzeptiert value_color); sparsam einsetzen, sonst
   verliert Farbe ihre Signalwirkung. Fussnote nur «vs. Worldline».
 - Die beiden Gebühren-Total-Kacheln tragen GROSS die Gesamtrate (Disagio) und
-  KLEIN die Komponente, die den Unterschied macht: WL «Ø Processing x %»,
-  SwiPay «Ø ASF x % · y % gespart». Das ist SwiPays einziger variabler Hebel
+  KLEIN die Komponente, die den Unterschied macht: BEIDE heissen «Ø ASF».
+  Worldline nennt sie intern «Processing Fee» — fachlich dasselbe, im
+  Kundentermin heisst beides ASF (Nutzer-Entscheid 2026-08-22). Auf der
+  SwiPay-Seite folgt die Veränderung DER ASF in Prozent, Vorzeichen wie bei der
+  Gebührenveränderung (Minus = günstiger) — NICHT die Gesamtersparnis.
+  ViewNumbers.asf_change_pct rechnet aus den BETRÄGEN, nicht aus den
+  angezeigten gerundeten Sätzen; wer 0.124/0.179 im Kopf teilt, landet 0.2 pp
+  daneben. Das ist SwiPays einziger variabler Hebel
   (ICF/CSF laufen als Pass-through identisch durch), aber KEINE Zerlegung der
   Ersparnis — auf Refunds modelliert die Engine eine volle Umkehr mit
   abs-Komponenten, Worldline bucht dort gemischte Vorzeichen (Davos: CHF 175

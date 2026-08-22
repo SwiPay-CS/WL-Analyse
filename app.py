@@ -443,13 +443,22 @@ def page_praesentation() -> None:
             # deshalb ist das der einzige variable Hebel. Bewusst NICHT «davon»
             # genannt -- die Gesamtrate ist netto nach DCC-Cashback, die ASF
             # ist also kein reiner Teilbetrag davon.
-            sav_txt = (f"{v.rel_pct:.1f} % gespart" if v.rel_pct >= 0
-                       else f"{abs(v.rel_pct):.1f} % teurer")
-            wl_asf_foot = (f"Ø Processing {pct_rate(v.wl_processing_rate)}"
+            # Worldline nennt die Komponente "Processing Fee" -- fachlich
+            # dasselbe wie die ASF, deshalb heisst hier beides ASF.
+            # Die kleine Zahl auf der SwiPay-Seite ist die Veränderung DER ASF
+            # (nicht die Gesamtersparnis), Vorzeichen wie bei der
+            # Gebührenveränderung: Minus = günstiger.
+            wl_asf_foot = (f"Ø ASF {pct_rate(v.wl_processing_rate)}"
                            if v.wl_processing_rate is not None
                            else "vom Bruttoumsatz")
-            sp_asf_foot = (f"Ø ASF {pct_rate(v.asf_rate)} · {sav_txt}"
-                           if v.asf_rate is not None else sav_txt)
+            sp_asf_foot = "vom Bruttoumsatz"
+            if v.asf_rate is not None:
+                sp_asf_foot = f"Ø ASF {pct_rate(v.asf_rate)}"
+                achg = v.asf_change_pct
+                if achg is not None:
+                    achg_txt = ("0.0 %" if abs(achg) < 0.05
+                                else f"{achg:+.1f} %")
+                    sp_asf_foot += f" · {achg_txt}"
             ui.kpi_row([
                 {"label": "Gebühren Total WL", "value": pct_rate(v.wl_rate),
                  "foot": wl_asf_foot, "accent": ui.ANTHRAZIT},

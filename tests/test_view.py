@@ -86,3 +86,27 @@ def test_dcc_share_uses_the_net_base_and_survives_zero_volume():
     assert v.dcc_share == pytest.approx(4_100_000.0 / 20_900_000.0)
     d = dict(_D, fx_vol=0.0)
     assert build_view(_Agg(), _T, d, BASIS_IST).dcc_share == 0.0
+
+
+# ── ASF-Vergleich ─────────────────────────────────────────────────────────────
+
+def test_asf_change_uses_the_same_sign_convention_as_the_fee_change():
+    """Minus = SwiPays ASF ist günstiger, wie bei fee_change_pct."""
+    v = build_view(_Agg(), _T, _D, BASIS_PA)
+    # 1'400 gegen 2'100 -> ein Drittel günstiger.
+    assert v.asf_change_pct == pytest.approx((1_400 - 2_100) / 2_100 * 100)
+    assert v.asf_change_pct < 0
+
+
+def test_asf_change_matches_the_rate_ratio():
+    """Die Veränderung muss identisch sein, ob man sie aus den Beträgen oder
+    aus den beiden Ø-Sätzen rechnet -- derselbe Nenner kürzt sich weg."""
+    v = build_view(_Agg(), _T, _D, BASIS_PA)
+    from_rates = (v.asf_rate - v.wl_processing_rate) / v.wl_processing_rate * 100
+    assert v.asf_change_pct == pytest.approx(from_rates)
+
+
+def test_asf_change_is_none_without_a_worldline_basis():
+    """Ohne WL-ASF ist die Relation undefiniert -- None, nicht 0."""
+    t = dict(_T, wl_processing=0.0)
+    assert build_view(_Agg(), t, _D, BASIS_IST).asf_change_pct is None
