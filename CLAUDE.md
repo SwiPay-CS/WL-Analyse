@@ -110,6 +110,9 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   Umschalter fehlt wenn keine da ist. «Zeit & Verteilung» bleibt bewusst immer
   Ist (ein Monatsverlauf lässt sich nicht hochrechnen, ohne Saisonalität zu
   erfinden) und sagt das im Untertitel.
+- Kunden-PDF trägt denselben ASF-Vergleich wie der Bildschirm (Gesamtrate
+  gross, «Ø ASF x % · ±y %» klein). Wer eine Kennzahl auf dem Bildschirm
+  ändert, muss sie im PDF mitziehen — beide lesen aus derselben View.
 - Kunden-PDF (reporter.build_pdf) bekommt DASSELBE ViewNumbers-Objekt wie der
   Bildschirm und FOLGT damit der gewählten Ansicht; `projection` liefert nur
   noch Deckungsgrad, Planungsband und Entity-Listen, alle Beträge kommen aus
@@ -241,6 +244,11 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - WL-Gebühren 116'513.10, DCC-Payback 12'702.45.
 - Identität: Gebühren = Processing Fee + Scheme Fee + Interchange (null Abw.).
 - validate.py prüft das.
+
+## Status
+Kopfzeile und Sidebar zeigen «Live» (vorher «IN ABNAHME»), auf Nutzer-Entscheid
+2026-08-22. Der Titel im Präsentations-Header lautet «Payment Benchmarking ·
+<Partner>», gleichlautend mit dem PDF-Titel.
 
 ## Offen vor Kundeneinsatz
 - ASF-Defaults (Debit 0.30 %, Credit 0.35 %) sind Platzhalter. Vor jedem

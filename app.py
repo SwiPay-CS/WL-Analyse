@@ -84,11 +84,6 @@ def pct_rate(frac: float) -> str:
     return f"{frac * 100:.{RATE_DEC}f} %"
 
 
-def pp(frac: float) -> str:
-    """A DIFFERENCE between two rates, in percentage points -- never "%", which
-    would read as a relative saving."""
-    return f"{frac * 100:.{RATE_DEC}f} %-Punkte"
-
 init_db(DB_PATH)
 init_groups_db(DB_PATH)
 hoch_store.init_hochrechnung_db(DB_PATH)
@@ -253,7 +248,7 @@ with st.sidebar:
     page = st.session_state.nav
     st.markdown(
         '<div style="margin-top:1.4rem;font-size:.7rem;color:#8a9495;'
-        'letter-spacing:.04em">WL Compare · IN ABNAHME<br>IC++ gegen IC++</div>',
+        'letter-spacing:.04em">WL Compare · Live<br>IC++ gegen IC++</div>',
         unsafe_allow_html=True)
 
 df = _ensure_month(st.session_state.df)
@@ -331,9 +326,9 @@ def page_praesentation() -> None:
             partner_disp = names[0]
 
     ui.page_header(
-        f"Auswertung · {partner_disp}",
+        f"Payment Benchmarking · {partner_disp}",
         "Dein Konditionenvergleich Worldline gegen SwiPay auf einen Blick.",
-        status="IN ABNAHME",
+        status="Live",
         meta=f"Zeitraum {frm or '–'} bis {to or '–'} · IC++ gegen IC++",
     )
 

@@ -75,11 +75,6 @@ def _pct_rate(frac: float) -> str:
     return f"{frac * 100:.{RATE_DEC}f} %"
 
 
-def _pp(frac: float) -> str:
-    """Differenz zweier Raten in Prozentpunkten -- nie in %."""
-    return f"{frac * 100:.{RATE_DEC}f} %-Punkte"
-
-
 def _safe(text: str) -> str:
     """Identity since the report embeds Saira (a Unicode TTF).
 
@@ -540,20 +535,29 @@ def build_pdf(
     y = _tiles(pdf, pdf.get_y(), [
         (f"Bruttoumsatz {v.suffix}", f"CHF {_chf(v.brutto, 0)}", _BLUE),
         ("Gebührenveränderung", chg_txt,
-         _GREEN_CI if v.rel_pct >= 0 else _ROT),
-        (f"Transaktionen {v.suffix}", _num(v.n_txn), _CYAN),
+         _GREEN_CI if v.rel_pct >= 0 else _ROT, "vs. Worldline"),
+        (f"Transaktionen {v.suffix}", _num(v.n_txn), _CYAN, v.note),
     ], w_total=W)
     if v.wl_rate is not None:
-        # Ratendifferenz in %-PUNKTEN, nie in %: daneben steht die relative
-        # Veraenderung in Prozent.
+        # Wie auf dem Bildschirm: gross die Gesamtrate (Disagio), klein die
+        # ASF -- die einzige Komponente, die SwiPay veraendert (ICF/CSF laufen
+        # als Pass-through identisch durch). Worldline nennt sie "Processing
+        # Fee"; hier heisst beides ASF, damit der Vergleich lesbar bleibt.
         dlt = v.rate_delta
-        foot = ("gleiche Rate" if abs(dlt) < 5e-6 else
-                f"{_pp(dlt)} günstiger" if dlt > 0 else f"{_pp(-dlt)} teurer")
+        wl_foot = (f"Ø ASF {_pct_rate(v.wl_processing_rate)}"
+                   if v.wl_processing_rate is not None else "vom Bruttoumsatz")
+        sp_foot = "vom Bruttoumsatz"
+        if v.asf_rate is not None:
+            sp_foot = f"Ø ASF {_pct_rate(v.asf_rate)}"
+            achg = v.asf_change_pct
+            if achg is not None:
+                sp_foot += (" · 0.0 %" if abs(achg) < 0.05
+                            else f" · {achg:+.1f} %")
         y = _tiles(pdf, y, [
             ("Gebühren Total Worldline", _pct_rate(v.wl_rate), _ANTHRAZIT,
-             "vom Bruttoumsatz"),
+             wl_foot),
             ("Gebühren Total SwiPay", _pct_rate(v.sp_rate),
-             _GREEN_CI if dlt >= 0 else _ROT, foot),
+             _GREEN_CI if dlt >= 0 else _ROT, sp_foot),
             ("Ø Transaktionswert", f"CHF {_chf(v.avg_ticket)}", _CYAN,
              "aus dem Ist-Mix"),
         ], w_total=W)
@@ -563,7 +567,9 @@ def build_pdf(
     extra = f"Aktive Terminals: {n_terminals}. " if n_terminals else ""
     pdf.multi_cell(0, 4, _safe(
         f"{extra}Gebührenraten als Anteil vom Bruttoumsatz, netto nach "
-        f"DCC-Cashback. Eine Ratendifferenz ist in Prozentpunkten angegeben."))
+        "DCC-Cashback. Die ASF ist die einzige Komponente, die SwiPay "
+        "verändert – Interchange und Scheme Fees laufen unverändert durch. "
+        "Die Prozentangabe daneben ist die Veränderung der ASF."))
     pdf.ln(3)
 
     # ── Seite 2: Aufschluesselung, DCC, Grundlagen ────────────────────────────
