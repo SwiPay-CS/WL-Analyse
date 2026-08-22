@@ -495,11 +495,17 @@ def page_praesentation() -> None:
                              " · keine Hochrechnung hinterlegt")),
                     accent=acc_total)
     with kcol:
+        # Veraenderung, nicht Reduktion: das Vorzeichen zeigt die Richtung der
+        # Gebuehren. Sinken sie, steht ein Minus (gruen); steigen sie, ein Plus
+        # (rot). rel_pct ist die ERSPARNIS, also invertieren. Der Nullfall wird
+        # abgefangen, sonst formatiert Python die negative Null als "-0.0 %".
+        chg = -v["rel_pct"]
+        chg_txt = "0.0 %" if abs(chg) < 0.05 else f"{chg:+.1f} %"
         ui.kpi_row([
             {"label": f"Bruttoumsatz {v['suffix']}",
              "value": f"CHF {chf_c(v['brutto'])}",
              "foot": v["note"], "accent": ui.BLUE},
-            {"label": "Gebühren-Reduktion", "value": f"{v['rel_pct']:.1f} %",
+            {"label": "Gebührenveränderung", "value": chg_txt,
              "foot": "vs. Worldline",
              "accent": ui.GREEN if v["rel_pct"] >= 0 else ui.ROT},
         ])
