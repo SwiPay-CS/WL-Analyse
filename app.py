@@ -48,7 +48,12 @@ ROOT    = Path(__file__).parent
 DB_PATH = str(ROOT / "data" / "swipay.db")
 (ROOT / "data").mkdir(exist_ok=True)
 
-_TYPE_LABEL = {"debit": "Debit", "credit": "Credit", "credit2": "Credit 2"}
+_TYPE_LABEL = {"debit": "Debit", "credit": "Credit M/V", "credit2": "Credit Rest"}
+_TYPE_SPECIAL = "Spezial / n/a"
+# Feste Anzeigereihenfolge fuer JEDE Kartentyp-Aufschluesselung -- nie nach
+# Betrag sortiert, damit im Kundentermin immer dieselbe Zeile an derselben
+# Stelle steht.
+_TYPE_ORDER = ["Debit", "Credit M/V", "Credit Rest", _TYPE_SPECIAL]
 HIST_BINS   = [0, 10, 50, 100, 200, 500, float("inf")]
 HIST_LABELS = ["0–10", "10–50", "50–100", "100–200", "200–500", "500+"]
 
@@ -212,6 +217,15 @@ def _view(agg, t: dict, d: dict, basis: str) -> dict:
     return v
 
 
+def _order_types(g: pd.DataFrame) -> pd.DataFrame:
+    """Bring a Typ/Ersparnis-Frame in die feste Reihenfolge _TYPE_ORDER.
+    Unbekannte Typen laufen hinten mit, statt still zu verschwinden."""
+    rank = {t: i for i, t in enumerate(_TYPE_ORDER)}
+    return (g.assign(_o=g["Typ"].map(lambda t: rank.get(t, len(rank))))
+            .sort_values("_o", kind="stable").drop(columns="_o")
+            .reset_index(drop=True))
+
+
 def _savings_by_type_scaled(entities, scales: list[float]) -> pd.DataFrame:
     """Ersparnis nach Kartentyp, je Entity mit IHREM eigenen Hochrechnungs-
     faktor skaliert (scales ist positionsgleich zur entities-Liste, siehe
@@ -225,7 +239,7 @@ def _savings_by_type_scaled(entities, scales: list[float]) -> pd.DataFrame:
         types = [master.type_of(b) for b in e.df["brand"].astype(str)]
         saving = (comp["wl_net"] - comp["sp_net"]).to_numpy(float) * scale
         for typ, val in zip(types, saving):
-            lbl = _TYPE_LABEL.get(typ, "Spezial / n/a")
+            lbl = _TYPE_LABEL.get(typ, _TYPE_SPECIAL)
             acc[lbl] = acc.get(lbl, 0.0) + float(val)
     g = pd.DataFrame({"Typ": list(acc), "Ersparnis": list(acc.values())})
     return g[g["Ersparnis"].abs() > 0.005] if not g.empty else g
@@ -234,7 +248,7 @@ def _savings_by_type_scaled(entities, scales: list[float]) -> pd.DataFrame:
 def _savings_by_type(fdf: pd.DataFrame, comp: pd.DataFrame) -> pd.DataFrame:
     types = [master.type_of(b) for b in fdf["brand"].astype(str)]
     tmp = pd.DataFrame({
-        "Typ": [_TYPE_LABEL.get(x, "Spezial / n/a") for x in types],
+        "Typ": [_TYPE_LABEL.get(x, _TYPE_SPECIAL) for x in types],
         "Ersparnis": (comp["wl_net"] - comp["sp_net"]).values,
     })
     g = tmp.groupby("Typ", as_index=False)["Ersparnis"].sum()
@@ -551,15 +565,17 @@ def page_praesentation() -> None:
                f"Wo der Vorteil entsteht · {v['note']} ({v['suffix']})")
     # Bei p.a. je Entity mit IHREM Faktor skaliert, damit die Summe exakt dem
     # Wert im Hero entspricht.
-    sbt = (_savings_by_type_scaled(entities, agg.scales)
-           if basis == _BASIS_PA else _savings_by_type(fdf, comp))
+    sbt = _order_types(_savings_by_type_scaled(entities, agg.scales)
+                       if basis == _BASIS_PA else _savings_by_type(fdf, comp))
     if not sbt.empty:
         a, b = st.columns([1.6, 1])
         with a:
-            st.altair_chart(ui.chart_savings_by_type(sbt),
-                            use_container_width=True)
+            st.altair_chart(
+                ui.chart_savings_by_type(sbt, order=_TYPE_ORDER),
+                use_container_width=True)
         with b:
-            rows = sbt.sort_values("Ersparnis", ascending=False)
+            # Dieselbe feste Reihenfolge wie im Chart, nicht nach Betrag.
+            rows = sbt
             items = "".join(
                 f"<div style='display:flex;justify-content:space-between;"
                 f"gap:1rem;padding:.3rem 0;border-bottom:1px solid "

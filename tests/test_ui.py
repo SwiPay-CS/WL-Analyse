@@ -1,6 +1,7 @@
 """Tests for ui.py: pure formatting helpers and chart specs (the chart
 builders are Altair-only, so they need no Streamlit runtime either)."""
 
+import pandas as pd
 import pytest
 
 import ui
@@ -68,3 +69,39 @@ def test_dcc_share_donut_handles_zero_volume():
     spec = ui.chart_dcc_share(0.0, 0.0).to_dict()
     rows = next(r for r in spec["datasets"].values() if r and "Segment" in r[0])
     assert all(r["Anteil"] == 0.0 for r in rows)
+
+
+# ── Ersparnis nach Kartentyp ──────────────────────────────────────────────────
+
+_TYPE_ORDER = ["Debit", "Credit M/V", "Credit Rest", "Spezial / n/a"]
+
+
+def _type_chart_order(rows: list[tuple[str, float]]) -> list[str]:
+    df = pd.DataFrame(rows, columns=["Typ", "Ersparnis"])
+    spec = ui.chart_savings_by_type(df, order=_TYPE_ORDER).to_dict()
+    return spec["layer"][0]["encoding"]["y"]["sort"]
+
+
+def test_savings_by_type_keeps_the_fixed_order_regardless_of_amount():
+    """Debit, Credit M/V, Credit Rest -- immer, auch wenn die Betraege eine
+    andere Reihenfolge nahelegen. Sonst springen die Zeilen im Kundentermin."""
+    order = _type_chart_order([
+        ("Credit Rest", 52.0), ("Debit", 24_854.0), ("Credit M/V", 34_810.0)])
+    assert order == ["Debit", "Credit M/V", "Credit Rest"]
+
+    # Umgekehrte Betragslage, identische Reihenfolge.
+    order = _type_chart_order([
+        ("Credit M/V", 10.0), ("Credit Rest", 90_000.0), ("Debit", 500.0)])
+    assert order == ["Debit", "Credit M/V", "Credit Rest"]
+
+
+def test_savings_by_type_omits_types_absent_from_the_data():
+    """Ein Typ ohne Daten darf keine leere Zeile im Chart reservieren."""
+    order = _type_chart_order([("Debit", 100.0), ("Credit Rest", 20.0)])
+    assert order == ["Debit", "Credit Rest"]
+
+
+def test_savings_by_type_without_order_still_sorts_by_amount():
+    df = pd.DataFrame({"Typ": ["A", "B"], "Ersparnis": [90.0, 10.0]})
+    spec = ui.chart_savings_by_type(df).to_dict()
+    assert spec["layer"][0]["encoding"]["y"]["sort"] == ["B", "A"]

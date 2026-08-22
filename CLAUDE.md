@@ -105,6 +105,11 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   Faktor skaliert (aggregation.AggregateProjection.scales), nie mit einem
   gemischten Durchschnittsfaktor — sonst deckt sich die Summe nicht mit dem
   Hero-Wert.
+- Kartentyp-Labels und -Reihenfolge sind fix (_TYPE_LABEL/_TYPE_ORDER in
+  app.py, einzige Label-Quelle, gilt auch für die ASF-Eingabe in
+  Einstellungen): Debit, Credit M/V (Mastercard/Visa), Credit Rest
+  (Diners/Discover, JCB, UnionPay), dann Spezial / n/a. NIE nach Betrag
+  sortieren — im Kundentermin muss dieselbe Zeile an derselben Stelle stehen.
 - Effektive Gebührenrate: als Prozent vom Bruttoumsatz, NICHT in Basispunkten,
   mit drei Dezimalen (pct_rate()/RATE_DEC in app.py). Zwei Dezimalen ergäben
   0.75 % und 0.67 %, und 0.08/0.75 = 10.7 % widerspräche der Kachel

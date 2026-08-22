@@ -296,11 +296,23 @@ def chart_dcc_compare(wl_cb: float, sp_cb: float) -> alt.Chart:
     return chart_compare(wl_cb, sp_cb, "DCC-Cashback CHF", CYAN)
 
 
-def chart_savings_by_type(df: pd.DataFrame) -> alt.Chart:
-    """df columns: Typ, Ersparnis (wl_net - sp_net per brand type)."""
-    df = df.copy().sort_values("Ersparnis")
+def chart_savings_by_type(df: pd.DataFrame,
+                          order: list[str] | None = None) -> alt.Chart:
+    """df columns: Typ, Ersparnis (wl_net - sp_net per brand type).
+
+    order gives the fixed top-to-bottom sequence (first entry on top). Pass it
+    whenever the rows should sit in the same place every time; without it the
+    chart falls back to sorting by amount.
+    """
+    df = df.copy()
+    if order is None:
+        df = df.sort_values("Ersparnis")
+        order = df["Typ"].tolist()
+    else:
+        # Nur Typen behalten, die auch Daten haben -- sonst reserviert Vega
+        # eine leere Zeile fuer einen Typ, der im Datensatz nicht vorkommt.
+        order = [t for t in order if t in set(df["Typ"])]
     df["lbl"] = df["Ersparnis"].map(lambda v: chf(v, 0))
-    order = df["Typ"].tolist()
     lo, hi = min(0.0, df["Ersparnis"].min()), max(0.0, df["Ersparnis"].max())
     pad = (hi - lo) * 0.24 or 1.0
     yenc = alt.Y("Typ:N", title=None, sort=order,
