@@ -105,11 +105,18 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   Faktor skaliert (aggregation.AggregateProjection.scales), nie mit einem
   gemischten Durchschnittsfaktor — sonst deckt sich die Summe nicht mit dem
   Hero-Wert.
-- Kartentyp-Labels und -Reihenfolge sind fix (_TYPE_LABEL/_TYPE_ORDER in
-  app.py, einzige Label-Quelle, gilt auch für die ASF-Eingabe in
-  Einstellungen): Debit, Credit M/V (Mastercard/Visa), Credit Rest
-  (Diners/Discover, JCB, UnionPay), dann Spezial / n/a. NIE nach Betrag
+- Kartentyp-Labels und -Reihenfolge sind fix. _TYPE_LABEL in app.py ist die
+  EINZIGE Label-Quelle und deckt alle vier Typen aus settings.ALL_TYPES ab:
+  Debit, Credit M/V (Mastercard/Visa), Credit Rest (Diners/Discover, JCB,
+  UnionPay), Spezial. Gilt überall, wo ein Typ benannt wird — Ersparnis-
+  Aufschlüsselung, ASF-Eingabe und Brand-Stammliste (Einstellungen → Mapping).
+  Die Stammliste zeigt Labels und mappt beim Speichern über _TYPE_KEY zurück
+  auf den Schlüssel; ein roher Schlüssel wird weiterhin akzeptiert.
+  _TYPE_ORDER = Debit, Credit M/V, Credit Rest, Spezial / n/a. NIE nach Betrag
   sortieren — im Kundentermin muss dieselbe Zeile an derselben Stelle stehen.
+- In der Ersparnis-Aufschlüsselung teilen «spezial» und nicht zuordenbare
+  Brands EINE Sammelzeile «Spezial / n/a» (_type_bucket() in app.py). Beide
+  haben per Definition Delta 0; eine Trennung ergäbe zwei Null-Zeilen.
 - Effektive Gebührenrate: als Prozent vom Bruttoumsatz, NICHT in Basispunkten,
   mit drei Dezimalen (pct_rate()/RATE_DEC in app.py). Zwei Dezimalen ergäben
   0.75 % und 0.67 %, und 0.08/0.75 = 10.7 % widerspräche der Kachel

@@ -28,6 +28,7 @@ from aggregation import EntityInput, aggregate
 from db_groups import init_groups_db, get_groups, assign_group, unassign_group
 from reporter import build_pdf, build_csv
 from settings import (
+    ALL_TYPES,
     OFFERABLE_TYPES,
     BrandRecord,
     BrandMaster,
@@ -48,12 +49,26 @@ ROOT    = Path(__file__).parent
 DB_PATH = str(ROOT / "data" / "swipay.db")
 (ROOT / "data").mkdir(exist_ok=True)
 
-_TYPE_LABEL = {"debit": "Debit", "credit": "Credit M/V", "credit2": "Credit Rest"}
+# Einzige Quelle fuer Kartentyp-Namen: Ersparnis-Aufschluesselung, ASF-Eingabe
+# und Brand-Stammliste. Keys sind die Typ-Schluessel aus settings.ALL_TYPES.
+_TYPE_LABEL = {"debit": "Debit", "credit": "Credit M/V",
+               "credit2": "Credit Rest", "spezial": "Spezial"}
+_TYPE_KEY = {v: k for k, v in _TYPE_LABEL.items()}   # Label -> Schluessel
+
+# Sammelzeile der Aufschluesselung: "spezial" UND nicht zuordenbare Brands
+# landen hier zusammen. Beide haben per Definition Delta 0 (SwiPay spiegelt
+# Worldline), eine Trennung ergaebe nur zwei Null-Zeilen.
 _TYPE_SPECIAL = "Spezial / n/a"
+
 # Feste Anzeigereihenfolge fuer JEDE Kartentyp-Aufschluesselung -- nie nach
 # Betrag sortiert, damit im Kundentermin immer dieselbe Zeile an derselben
 # Stelle steht.
 _TYPE_ORDER = ["Debit", "Credit M/V", "Credit Rest", _TYPE_SPECIAL]
+
+
+def _type_bucket(t: str | None) -> str:
+    """Label fuer die Ersparnis-Aufschluesselung (siehe _TYPE_SPECIAL)."""
+    return _TYPE_LABEL[t] if t in OFFERABLE_TYPES else _TYPE_SPECIAL
 HIST_BINS   = [0, 10, 50, 100, 200, 500, float("inf")]
 HIST_LABELS = ["0–10", "10–50", "50–100", "100–200", "200–500", "500+"]
 
@@ -239,7 +254,7 @@ def _savings_by_type_scaled(entities, scales: list[float]) -> pd.DataFrame:
         types = [master.type_of(b) for b in e.df["brand"].astype(str)]
         saving = (comp["wl_net"] - comp["sp_net"]).to_numpy(float) * scale
         for typ, val in zip(types, saving):
-            lbl = _TYPE_LABEL.get(typ, _TYPE_SPECIAL)
+            lbl = _type_bucket(typ)
             acc[lbl] = acc.get(lbl, 0.0) + float(val)
     g = pd.DataFrame({"Typ": list(acc), "Ersparnis": list(acc.values())})
     return g[g["Ersparnis"].abs() > 0.005] if not g.empty else g
@@ -248,7 +263,7 @@ def _savings_by_type_scaled(entities, scales: list[float]) -> pd.DataFrame:
 def _savings_by_type(fdf: pd.DataFrame, comp: pd.DataFrame) -> pd.DataFrame:
     types = [master.type_of(b) for b in fdf["brand"].astype(str)]
     tmp = pd.DataFrame({
-        "Typ": [_TYPE_LABEL.get(x, _TYPE_SPECIAL) for x in types],
+        "Typ": [_type_bucket(x) for x in types],
         "Ersparnis": (comp["wl_net"] - comp["sp_net"]).values,
     })
     g = tmp.groupby("Typ", as_index=False)["Ersparnis"].sum()
@@ -1191,13 +1206,17 @@ def page_einstellungen() -> None:
         ui.section("Brand-Stammliste", "git-versioniert · config/brands.json")
         st.caption("Logisches Brand = ein/mehrere Such-Codes (Aliase). Typ steuert die "
                    "ASF. Spezial-Brands sind nie anbietbar (Worldline 1:1).")
-        rows = [{"Anzeigename": r.display_name, "Typ": r.type, "Anbietbar": r.offerable,
+        # Typ als Klartext-Label (dieselben Namen wie in der Aufschlüsselung und
+        # bei der ASF-Eingabe), nicht als Rohschlüssel. Beim Speichern zurück
+        # auf den Schlüssel gemappt.
+        rows = [{"Anzeigename": r.display_name,
+                 "Typ": _TYPE_LABEL.get(r.type, r.type), "Anbietbar": r.offerable,
                  "Reihenfolge": r.order, "Such-Codes": ", ".join(r.search_codes)}
                 for r in master.sorted_brands()]
         edit = st.data_editor(pd.DataFrame(rows), hide_index=True, num_rows="dynamic",
             use_container_width=True, column_config={
                 "Typ": st.column_config.SelectboxColumn(
-                    options=["debit", "credit", "credit2", "spezial"]),
+                    options=[_TYPE_LABEL[t] for t in ALL_TYPES]),
                 "Anbietbar": st.column_config.CheckboxColumn()}, key="master_editor")
         if st.button("Stammliste speichern", type="primary"):
             try:
@@ -1206,8 +1225,13 @@ def page_einstellungen() -> None:
                     name = str(r["Anzeigename"]).strip()
                     if not name:
                         continue
+                    # Label -> Schlüssel. Ein bereits roher Schlüssel (Altbestand
+                    # oder händisch getippt) wird durchgelassen; alles andere
+                    # faellt in BrandRecord's Validierung mit klarer Meldung.
+                    typ_in = str(r["Typ"]).strip()
+                    typ = _TYPE_KEY.get(typ_in, typ_in)
                     codes = [c.strip() for c in str(r["Such-Codes"]).split(",") if c.strip()]
-                    recs.append(BrandRecord(name, str(r["Typ"]).strip(),
+                    recs.append(BrandRecord(name, typ,
                                             bool(r["Anbietbar"]), int(r["Reihenfolge"]),
                                             codes or [name]))
                 nm = BrandMaster(recs); nm.save(); st.session_state.master = nm
