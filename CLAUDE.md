@@ -117,6 +117,19 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   (Hero + Acquiring/DCC/Total) · zwei Vergleiche · Kennzahlen; Seite 2
   Kartentyp · DCC · Grundlage der Hochrechnung · Datenhinweise. Zwei feste
   Seitenumbrüche, kein Auto-Break mitten in einer Sektion.
+- PDF-Kopf: das ECHTE Logo (assets/SWIPAY-Logo.svg, via pdf.image(), fpdf2
+  kann SVG direkt) auf WEISSEM Header, 34 mm breit, 8 mm Freiraum zum Titel.
+  Kein dunkler Balken mehr: die Wortmarke im Logo ist selbst anthrazit und
+  wäre darauf unsichtbar, und Brand & CI v2.1 verbietet Farbänderungen am Logo
+  ausdrücklich («Logo-Grundregeln»: keine Farbänderungen, Mindestgrösse 25 mm
+  Print, Freiraum 8 mm). Titel: «SwiPay Payment Benchmarking». Roter
+  Akzent-Strich statt Farbfläche.
+- PDF-Fussnote: «SwiPay AG · Vertraulich - nur für autorisierte Empfänger ·
+  Alle Angaben ohne Gewähr». NICHT «für den internen Gebrauch» — das Dokument
+  geht an den Händler.
+- Ansprache im PDF ist DU, nicht Sie (Brand & CI v2.1, Corporate Voice:
+  «Anrede: immer Du — konsequent, überall»). Der Bildschirm hielt das schon
+  ein, das PDF siezte.
 - PDF-Grafiken sind native fpdf2-Vektoren (kein gerendertes Altair-PNG, keine
   Zusatz-Abhängigkeit). ACHTUNG: fpdf2s solid_arc() taugt NICHT für einen
   Donut — es platziert den Mittelpunkt nicht wie dokumentiert und zeichnet

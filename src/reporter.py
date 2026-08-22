@@ -13,6 +13,7 @@ Font: Helvetica (PDF built-in; matches Saira weight/structure closely enough).
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 from fpdf import FPDF
@@ -34,6 +35,8 @@ _LINE       = (227, 221, 214)   # #e3ddd6
 _WHITE      = (255, 255, 255)
 _DIM        = (138, 148, 149)   # ≈ rgba(62,75,76,.62)
 _FAINT      = (170, 175, 176)   # ≈ rgba(62,75,76,.42)
+
+_ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 _BADGE_COLORS = {
     CoverageLabel.SIMULATABLE:  _GREEN_CI,
@@ -77,35 +80,49 @@ def _safe(text: str) -> str:
 # ── PDF base class ────────────────────────────────────────────────────────────
 
 class _SwiPayPDF(FPDF):
-    """FPDF subclass with SwiPay CI header and footer."""
+    """FPDF subclass with the SwiPay CI header and footer."""
 
     generated_date: str = ""
 
+    # Brand rules (Brand & CI v2.1, "Logo-Grundregeln"): the logo may NOT be
+    # recoloured, so it cannot sit on the dark anthracite bar the dashboards
+    # use -- its wordmark is anthracite itself and would vanish. The header is
+    # therefore white, letterhead-style, with the original file untouched.
+    # Minimum size 25 mm in print, minimum 8 mm clear space to other elements.
+    _LOGO_W = 34.0          # mm, above the 25 mm minimum
+    _LOGO_CLEARANCE = 8.0   # mm, to the title beside it
+    _HEADER_H = 26.0
+
     def header(self) -> None:
-        # Dark full-width header bar
-        self.set_fill_color(*_ANTHRAZIT)
-        self.rect(0, 0, 210, 22, style="F")
-        # "SwiPay" wordmark
-        self.set_font("Helvetica", "B", 15)
-        self.set_text_color(*_WHITE)
-        self.set_xy(12, 5.5)
-        self.cell(38, 10, "SwiPay", border=0)
-        # Brand-red separator dot
-        self.set_font("Helvetica", "", 14)
-        self.set_text_color(*_ROT)
-        self.set_xy(49, 5.5)
-        self.cell(5, 10, "·", border=0)
-        # Report subtitle
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(185, 190, 191)
-        self.set_xy(55, 7)
-        self.cell(90, 8, "Worldline-Konditionenvergleich", border=0)
-        # Date right-aligned
+        logo = _ASSETS / "SWIPAY-Logo.svg"
+        title_x = self.l_margin
+        if logo.exists():
+            self.image(str(logo), x=self.l_margin, y=7, w=self._LOGO_W)
+            title_x = self.l_margin + self._LOGO_W + self._LOGO_CLEARANCE
+        else:
+            # Fallback ohne Logo-Datei: Wortmarke als Text.
+            self.set_font("Helvetica", "B", 15)
+            self.set_text_color(*_ANTHRAZIT)
+            self.set_xy(self.l_margin, 9)
+            self.cell(30, 10, "SwiPay", border=0)
+            title_x = self.l_margin + 30 + self._LOGO_CLEARANCE
+
+        self.set_font("Helvetica", "B", 12)
+        self.set_text_color(*_ANTHRAZIT)
+        self.set_xy(title_x, 11)
+        self.cell(100, 7, "SwiPay Payment Benchmarking", border=0)
+
         self.set_font("Helvetica", "", 7.5)
-        self.set_text_color(160, 165, 165)
-        self.set_xy(130, 8)
-        self.cell(68, 6, self.generated_date, border=0, align="R")
-        self.ln(22)
+        self.set_text_color(*_DIM)
+        self.set_xy(130, 12.5)
+        self.cell(68, 5, self.generated_date, border=0, align="R")
+
+        # Roter Akzent-Strich als Markenzeichen statt eines Farbbalkens.
+        self.set_draw_color(*_ROT)
+        self.set_line_width(0.6)
+        self.line(self.l_margin, self._HEADER_H - 1,
+                  self.l_margin + 186, self._HEADER_H - 1)
+        self.set_y(self._HEADER_H + 4)
 
     def footer(self) -> None:
         self.set_y(-14)
@@ -115,8 +132,8 @@ class _SwiPayPDF(FPDF):
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*_FAINT)
         self.cell(0, 8,
-                  "SwiPay AG  ·  Erstellt für den internen Gebrauch  ·  "
-                  "Alle Angaben ohne Gewähr",
+                  "SwiPay AG  ·  Vertraulich - nur für autorisierte Empfänger"
+                  "  ·  Alle Angaben ohne Gewähr",
                   border=0, align="C")
         self.set_xy(12, self.get_y() - 8)
         self.set_font("Helvetica", "", 7)
@@ -385,7 +402,7 @@ def build_pdf(
     pdf.ln(4)
 
     # ── Der Vorteil ───────────────────────────────────────────────────────────
-    _section_header(pdf, "Ihr geldwerter Vorteil")
+    _section_header(pdf, "Dein geldwerter Vorteil")
 
     # Hero: immer der errechnete Punktwert, wie auf dem Bildschirm. Die
     # Vorsicht steckt sichtbar im Planungsband und im Deckungs-Badge, nicht in
@@ -431,7 +448,7 @@ def build_pdf(
     pdf.set_font("Helvetica", "", 7.5)
     pdf.set_text_color(*_DIM)
     pdf.cell(0, 4, _safe("Acquiring + DCC = geldwerter Vorteil. Beim Acquiring "
-                         "sparen Sie Gebühren, beim DCC erhalten Sie mehr "
+                         "sparst du Gebühren, beim DCC bekommst du mehr "
                          "Cashback."))
     pdf.ln(7)
 
@@ -510,7 +527,7 @@ def build_pdf(
         pdf.set_text_color(*_DIM)
         pdf.multi_cell(0, 4, _safe(
             "Nicht offerierbare Brands erscheinen bewusst mit Null-Effekt - "
-            "dort ändert SwiPay nichts an Ihren Konditionen."))
+            "dort ändert SwiPay nichts an deinen Konditionen."))
         pdf.ln(4)
 
     # ── DCC ───────────────────────────────────────────────────────────────────
