@@ -55,6 +55,30 @@ def pct(v: float, dec: int = 2) -> str:
     return f"{v * 100:.{dec}f} %"
 
 
+def parse_chf(text: str) -> float | None:
+    """Betrag aus freier Eingabe lesen. None = nicht lesbar.
+
+    Gegenstueck zu chf(). Akzeptiert Apostroph, gerades und typografisches,
+    sowie normale, geschuetzte und schmale Leerzeichen als Tausendertrenner.
+    Ein einzelnes Komma ohne Punkt gilt als Dezimalkomma (so tippen viele),
+    weitere Kommas als Tausendertrenner. Negative Werte gelten als unlesbar --
+    ein Jahresumsatz ist nie negativ.
+    """
+    t = (text or "").strip()
+    for ch in ("'", "\u2019", "\u00a0", "\u202f", " "):
+        t = t.replace(ch, "")
+    if not t:
+        return 0.0
+    if t.count(",") == 1 and "." not in t:
+        t = t.replace(",", ".")
+    t = t.replace(",", "")
+    try:
+        v = float(t)
+    except ValueError:
+        return None
+    return v if v >= 0 else None
+
+
 def chf_compact(v: float) -> str:
     """Compact CHF for KPI cards: millions as 'Mio.', thousands kept full.
 
@@ -173,15 +197,22 @@ def hero(label: str, value: str, *, foot: str = "", accent: str = GREEN,
 
 
 def kpi_row(cards: list[dict]) -> None:
-    """cards: list of {label, value, foot, accent}."""
+    """cards: list of {label, value, foot, accent, value_color}.
+
+    value_color faerbt die ZAHL selbst (Default: Anthrazit). Nur setzen, wo das
+    Vorzeichen die Aussage traegt -- sonst wird die Seite bunt und die Farbe
+    verliert ihre Signalwirkung.
+    """
     cols = st.columns(len(cards))
     for col, c in zip(cols, cards):
         with col:
+            vc = c.get("value_color")
+            vstyle = f' style="color:{vc}"' if vc else ""
             st.markdown(
                 f"""
                 <div class="sp-card" style="--acc:{c.get('accent', CYAN)}">
                   <div class="sp-card-label">{c['label']}</div>
-                  <div class="sp-card-value">{c['value']}</div>
+                  <div class="sp-card-value"{vstyle}>{c['value']}</div>
                   <div class="sp-card-foot">{c.get('foot', '')}</div>
                 </div>
                 """,

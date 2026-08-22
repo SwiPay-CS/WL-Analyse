@@ -58,6 +58,12 @@ class ViewNumbers:
     dcc_vol_purch: float
     fx_vol_purch: float
 
+    # ASF-Ebene fuer den Ø-Satz-Vergleich (SwiPays einziger variabler Hebel
+    # gegen Worldlines Processing Fee). NICHT als Zerlegung der Ersparnis
+    # lesen -- siehe asf_rate().
+    sp_asf: float = 0.0
+    wl_processing: float = 0.0
+
     # Nur auf der p.a.-Basis gesetzt.
     band_low: float | None = None
     band_high: float | None = None
@@ -94,6 +100,24 @@ class ViewNumbers:
         return -self.rel_pct
 
     @property
+    def asf_rate(self) -> float | None:
+        """Ø ASF-Satz von SwiPay als Anteil vom Bruttoumsatz.
+
+        Der Vergleich mit wl_processing_rate zeigt den einzigen variablen
+        Hebel (ICF/CSF laufen als Pass-through identisch durch). Die Differenz
+        ist ein SATZVERGLEICH und NICHT exakt die Acquiring-Ersparnis: auf
+        Refunds modelliert die Engine eine volle Umkehr mit abs-Komponenten,
+        Worldline bucht dort gemischte Vorzeichen (siehe pipeline.py). Auf dem
+        Davos-Datensatz sind das CHF 175 auf CHF 8'561 Ersparnis.
+        """
+        return (self.sp_asf / self.brutto) if self.brutto else None
+
+    @property
+    def wl_processing_rate(self) -> float | None:
+        """Ø Processing-Fee-Satz von Worldline -- das Gegenstueck zur ASF."""
+        return (self.wl_processing / self.brutto) if self.brutto else None
+
+    @property
     def dcc_share(self) -> float:
         """Ausschoepfung: Anteil des DCC-faehigen Volumens, das als DCC laeuft.
         Netto-Basis -- so sind die Davos-Anker gelockt."""
@@ -127,6 +151,7 @@ def build_view(agg, t: dict, d: dict, basis: str) -> ViewNumbers:
             acquiring=agg.acquiring_advantage_annual,
             dcc=agg.dcc_advantage_annual,
             total=agg.saving_annual,
+            sp_asf=agg.sp_asf_annual, wl_processing=agg.wl_processing_annual,
             dcc_vol=agg.dcc_volume_annual, fx_vol=agg.fx_volume_annual,
             dcc_vol_purch=agg.dcc_purchase_volume_annual,
             fx_vol_purch=agg.fx_purchase_volume_annual,
@@ -143,6 +168,8 @@ def build_view(agg, t: dict, d: dict, basis: str) -> ViewNumbers:
         acquiring=t["wl_fee"] - t["sp_fee"],
         dcc=t["sp_cashback"] - t["wl_cashback"],
         total=t["wl_net"] - t["sp_net"],
+        sp_asf=t.get("sp_asf", 0.0),
+        wl_processing=t.get("wl_processing", 0.0),
         dcc_vol=d["dcc_vol"], fx_vol=d["fx_vol"],
         dcc_vol_purch=d["dcc_vol_purch"], fx_vol_purch=d["fx_vol_purch"],
     )

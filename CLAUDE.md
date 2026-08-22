@@ -170,6 +170,40 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - In der Ersparnis-Aufschlüsselung teilen «spezial» und nicht zuordenbare
   Brands EINE Sammelzeile «QR-Code / n/a» (_type_bucket() in app.py). Beide
   haben per Definition Delta 0; eine Trennung ergäbe zwei Null-Zeilen.
+- Gebührenveränderung (Kachel): zeigt die Richtung der GEBÜHREN, nicht der
+  Ersparnis — Minus = Gebühren sinken = grün, Plus = rot. Die Farbe sitzt hier
+  auf der ZAHL (ui.kpi_row akzeptiert value_color); sparsam einsetzen, sonst
+  verliert Farbe ihre Signalwirkung. Fussnote ist der Ø-SATZVERGLEICH auf der
+  ASF-Ebene: sp_asf/brutto gegen wl_processing/brutto. Das ist SwiPays einziger
+  variabler Hebel (ICF/CSF laufen als Pass-through identisch durch), aber
+  KEINE Zerlegung der Ersparnis — auf Refunds modelliert die Engine eine volle
+  Umkehr mit abs-Komponenten, Worldline bucht dort gemischte Vorzeichen
+  (Davos: CHF 175 Differenz auf CHF 8'561 Ersparnis). Nie als «davon aus der
+  ASF» beschriften.
+- Datenartefakte im Worldline-Export (Davos, gilt generell):
+  * Die LETZTE Zeile ist eine SUMMENZEILE: kein Betrag, keine Gebühren, aber
+    processing_fee = Summe aller anderen (-22'568.08). pipeline.py filtert sie
+    für Processing-Kennzahlen über `brutto.notna() | gebuehren.notna()` heraus
+    — ohne das ist jede Processing-Rate exakt doppelt. NICHT aus den Daten
+    entfernen: der Anker zählt 113'497 Zeilen.
+  * Dieselbe Zeile hat keine Partner-ID und erschien als Händler «nan (nan)».
+    _merchant_rows() überspringt Zeilen ohne Partner-ID (_is_real_pid);
+    _artefact_rows() zählt sie, damit das Ausblenden sichtbar bleibt.
+  * 8'571 Zeilen haben KEINE Komponenten-Aufschlüsselung (processing/scheme/
+    interchange alle NaN) — praktisch alles TWINT (nicht offerierbar, Delta 0)
+    plus 12 Nullbetrag-Zeilen. Deshalb hält die Identität Gebühren =
+    Processing + Scheme + Interchange nur auf Karten-Zeilen. Genau daher die
+    gelockte Regel, die WL-Basis aus der rohen `gebuehren`-Spalte zu nehmen.
+- Jahresumsatz-Eingabe (Einstellungen → Merchants → Hochrechnung): Textfeld mit
+  ui.parse_chf(), Anzeige in Schweizer Schreibweise mit Apostroph und zwei
+  Dezimalen. st.number_input kann keine Tausendertrenner (format ist ein
+  C-Format-String). Unlesbare Eingabe behält den letzten gültigen Wert und
+  sagt es — nie stillschweigend 0, das würde eine Hochrechnung löschen.
+- Gruppen-Hochrechnung: tragen Mitglieder eigene Jahresumsätze, zeigt die
+  Gruppe die SUMME ihrer Mitglieder schreibgeschützt an und der
+  Gruppen-Lump-Sum wird auf 0 gesetzt. Grund: per Präzedenz (aggregation.py)
+  schlagen Mitglieder-Werte den Lump-Sum ohnehin — ein editierbares Feld ohne
+  Wirkung wäre eine stille Doppelspur.
 - Effektive Gebührenrate: als Prozent vom Bruttoumsatz, NICHT in Basispunkten,
   mit drei Dezimalen (pct_rate()/RATE_DEC in app.py). Zwei Dezimalen ergäben
   0.75 % und 0.67 %, und 0.08/0.75 = 10.7 % widerspräche der Kachel

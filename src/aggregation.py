@@ -56,6 +56,8 @@ class EntityInput:
     ist_fx_vol: float = 0.0        # DCC-faehiges Fremdwaehrungsvolumen, netto
     ist_dcc_purchase_vol: float = 0.0  # dieselben Volumen, nur Kaeufe --
     ist_fx_purchase_vol: float = 0.0   # Basis fuer jede Cashback-Satz-Rechnung
+    ist_sp_asf: float = 0.0            # ASF-Ebene: SwiPays variabler Hebel
+    ist_wl_processing: float = 0.0     # Worldlines Gegenstueck dazu
 
 
 @dataclass
@@ -79,6 +81,8 @@ class AggregateProjection:
     wl_fee_annual: float = 0.0                  # Gebuehren VOR DCC-Cashback
     sp_fee_annual: float = 0.0
     acquiring_advantage_annual: float = 0.0     # wl_fee - sp_fee (gesparte Gebuehren)
+    sp_asf_annual: float = 0.0                  # nur fuer den Ø-Satz-Vergleich
+    wl_processing_annual: float = 0.0
     wl_cashback_annual: float = 0.0
     sp_cashback_annual: float = 0.0
 
@@ -132,6 +136,7 @@ def aggregate(
 
     wl = sp = dcc_adv = txn = 0.0
     wl_fee = sp_fee = wl_cb = sp_cb = 0.0
+    sp_asf = wl_pro = 0.0
     brutto_eff = dcc_vol = fx_vol = 0.0
     dcc_pur = fx_pur = 0.0
     proj_saving = 0.0
@@ -162,6 +167,8 @@ def aggregate(
             txn += proj.n_txn_annual
             wl_fee += proj.wl_fee_annual
             sp_fee += proj.sp_fee_annual
+            sp_asf += proj.sp_asf_annual
+            wl_pro += proj.wl_processing_annual
             wl_cb += proj.wl_dcc_cashback_annual
             sp_cb += proj.sp_dcc_cashback_annual
             brutto_eff += proj.annual_volume
@@ -185,6 +192,8 @@ def aggregate(
             txn += e.ist_txn
             wl_fee += e.ist_wl_fee
             sp_fee += e.ist_sp_fee
+            sp_asf += e.ist_sp_asf
+            wl_pro += e.ist_wl_processing
             wl_cb += e.ist_wl_cashback
             sp_cb += e.ist_sp_cashback
             brutto_eff += e.ist_brutto
@@ -221,6 +230,8 @@ def aggregate(
         wl_fee_annual=wl_fee,
         sp_fee_annual=sp_fee,
         acquiring_advantage_annual=wl_fee - sp_fee,
+        sp_asf_annual=sp_asf,
+        wl_processing_annual=wl_pro,
         wl_cashback_annual=wl_cb,
         sp_cashback_annual=sp_cb,
         brutto_annual=brutto_eff,

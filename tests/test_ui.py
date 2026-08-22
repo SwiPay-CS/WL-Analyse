@@ -105,3 +105,33 @@ def test_savings_by_type_without_order_still_sorts_by_amount():
     df = pd.DataFrame({"Typ": ["A", "B"], "Ersparnis": [90.0, 10.0]})
     spec = ui.chart_savings_by_type(df).to_dict()
     assert spec["layer"][0]["encoding"]["y"]["sort"] == ["B", "A"]
+
+
+# ── Betragseingabe: parse_chf ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("text,want", [
+    ("1159429",        1_159_429.0),
+    ("1'159'429",      1_159_429.0),   # Schweizer Apostroph
+    ("1’159’429",      1_159_429.0),   # typografischer Apostroph
+    ("1 159 429",      1_159_429.0),   # Leerzeichen
+    ("1 159 429", 1_159_429.0),  # geschuetztes Leerzeichen
+    ("1,159,429",      1_159_429.0),   # Kommas als Tausendertrenner
+    ("1'159'429.50",   1_159_429.5),
+    ("1159429,50",     1_159_429.5),   # Dezimalkomma
+    ("  17490  ",         17_490.0),
+    ("0",                      0.0),
+    ("",                       0.0),   # leer = 0, keine Fehleingabe
+])
+def test_parse_chf_accepts_every_realistic_spelling(text, want):
+    assert ui.parse_chf(text) == pytest.approx(want)
+
+
+@pytest.mark.parametrize("text", ["abc", "12.34.56", "-500", "1.2.3", "CHF 500"])
+def test_parse_chf_rejects_unreadable_input(text):
+    """None, nicht 0 -- eine stille 0 wuerde eine Hochrechnung loeschen."""
+    assert ui.parse_chf(text) is None
+
+
+def test_parse_chf_round_trips_with_chf():
+    for v in (0.0, 17_490.0, 1_159_429.5, 70_323_760.25):
+        assert ui.parse_chf(ui.chf(v, 2)) == pytest.approx(v)

@@ -420,13 +420,21 @@ def page_praesentation() -> None:
         # abgefangen, sonst formatiert Python die negative Null als "-0.0 %".
         chg = v.fee_change_pct
         chg_txt = "0.0 %" if abs(chg) < 0.05 else f"{chg:+.1f} %"
+        # Minus = Gebühren sinken = grün. Die Farbe sitzt hier auf der ZAHL,
+        # weil das Vorzeichen die eigentliche Aussage der Kachel ist.
+        tone_chg = ui.GREEN if v.rel_pct >= 0 else ui.ROT
+        # Ø ASF gegen Worldlines Processing Fee: der einzige variable Hebel
+        # (ICF/CSF laufen als Pass-through identisch durch). Ein SATZVERGLEICH,
+        # keine Zerlegung der Ersparnis -- siehe ViewNumbers.asf_rate.
+        asf_foot = ("vs. Worldline" if v.asf_rate is None else
+                    f"Ø ASF {pct_rate(v.asf_rate)} vs. WL "
+                    f"{pct_rate(v.wl_processing_rate)}")
         ui.kpi_row([
             {"label": f"Bruttoumsatz {v.suffix}",
              "value": f"CHF {chf_c(v.brutto)}",
              "foot": v.note, "accent": ui.BLUE},
             {"label": "Gebührenveränderung", "value": chg_txt,
-             "foot": "vs. Worldline",
-             "accent": ui.GREEN if v.rel_pct >= 0 else ui.ROT},
+             "foot": asf_foot, "accent": tone_chg, "value_color": tone_chg},
         ])
         # Effektive Gebührenrate in % vom Umsatz -- vergleichbar mit jedem
         # anderen Angebot, unabhängig von der Umsatzgrösse.
@@ -434,13 +442,12 @@ def page_praesentation() -> None:
             dlt = v.rate_delta
             # Richtung ausschreiben: ein nacktes "+0.085" liest sich, als wäre
             # SwiPay teurer, obwohl es die Ersparnis ist.
-            # %-Punkte, nicht %: die Ratendifferenz und die relative
-            # Reduktion stehen nebeneinander und dürfen nicht dieselbe Einheit
-            # tragen, sonst liest man 0.085 als 8.5 % Ersparnis.
-            rate_foot = (
-                "gleiche Rate" if abs(dlt) < 5e-6 else
-                f"{pp(dlt)} günstiger ({-v.rel_pct:.1f} %)" if dlt > 0 else
-                f"{pp(-dlt)} teurer (+{abs(v.rel_pct):.1f} %)")
+            # %-Punkte, nicht %. Die relative Veränderung steht bereits in
+            # der Kachel «Gebührenveränderung» -- hier nur die Ratendifferenz,
+            # sonst dieselbe Zahl zweimal.
+            rate_foot = ("gleiche Rate" if abs(dlt) < 5e-6 else
+                         f"{pp(dlt)} günstiger" if dlt > 0 else
+                         f"{pp(-dlt)} teurer")
             ui.kpi_row([
                 {"label": "Gebühren Total WL", "value": pct_rate(v.wl_rate),
                  "foot": "vom Bruttoumsatz", "accent": ui.ANTHRAZIT},
@@ -770,6 +777,8 @@ def _agg_merchant(sub: pd.DataFrame) -> dict:
         "_fx_vol": vb.fx_net,
         "_dcc_vol_purch": vb.dcc_purchase,
         "_fx_vol_purch": vb.fx_purchase,
+        "_sp_asf": float(sub["sp_asf"].sum()),
+        "_wl_processing": float(sub["wl_processing"].sum()),
     }
 
 
@@ -780,7 +789,69 @@ def _with_comparison(df_subset: pd.DataFrame) -> pd.DataFrame:
     out["wl_cb"], out["sp_cb"] = comp["wl_cashback"].values, comp["sp_cashback"].values
     # Fee level BEFORE DCC cashback -- the Acquiring leg of the advantage.
     out["wl_fee"], out["sp_fee"] = comp["wl_fee"].values, comp["sp_fee"].values
+    # ASF-Ebene fuer den Ø-Satz-Vergleich.
+    out["sp_asf"] = comp["sp_asf"].values
+    out["wl_processing"] = comp["wl_processing"].values
     return out
+
+
+# ── Jahresumsatz-Eingabe ──────────────────────────────────────────────────────
+# st.number_input kann keine Tausender-Trennzeichen (format ist ein
+# C-Format-String), deshalb ein Textfeld mit ui.parse_chf(). Angezeigt wird
+# Schweizer Schreibweise mit Apostroph und zwei Dezimalen (1'159'429.00), damit
+# man einer siebenstelligen Zahl beim Eintippen ansieht, was drin steht.
+
+def _fmt_vol(v: float) -> str:
+    return chf(float(v), 2)
+
+
+def _volume_input(container, key: str, default: float, *,
+                  label: str = "Jahresumsatz CHF",
+                  label_visibility: str = "visible") -> float:
+    """Formatiertes Jahresumsatz-Feld. Gibt den numerischen Wert zurueck.
+
+    Der Zahlenwert lebt in <key>__num, der Text im Widget-Key <key>__txt. Bei
+    unlesbarer Eingabe bleibt der letzte gueltige Wert stehen und es gibt einen
+    sichtbaren Hinweis -- keine stille 0.
+    """
+    txt_key, num_key, err_key = f"{key}__txt", f"{key}__num", f"{key}__err"
+    if num_key not in st.session_state:
+        st.session_state[num_key] = float(default)
+        st.session_state[txt_key] = _fmt_vol(default)
+
+    def _sync() -> None:
+        parsed = ui.parse_chf(st.session_state[txt_key])
+        if parsed is None:
+            st.session_state[err_key] = st.session_state[txt_key]
+            st.session_state[txt_key] = _fmt_vol(st.session_state[num_key])
+        else:
+            st.session_state[err_key] = None
+            st.session_state[num_key] = parsed
+            st.session_state[txt_key] = _fmt_vol(parsed)
+
+    container.text_input(label, key=txt_key, on_change=_sync,
+                         label_visibility=label_visibility)
+    bad = st.session_state.get(err_key)
+    if bad:
+        container.caption(f"«{bad}» ist keine Zahl — letzter Wert beibehalten.")
+    return float(st.session_state[num_key])
+
+
+_NON_PIDS = {"", "nan", "none", "<na>", "nat"}
+
+
+def _is_real_pid(pid: str) -> bool:
+    """False fuer leere/NaN-Partner-IDs -- siehe _merchant_rows()."""
+    return str(pid).strip().lower() not in _NON_PIDS
+
+
+def _artefact_rows(base_df: pd.DataFrame, pid_col: str) -> int:
+    """Anzahl Zeilen ohne verwertbare Partner-ID. Wird als Hinweis angezeigt,
+    damit das Ausblenden sichtbar bleibt (lieber eine Luecke als eine Luege)."""
+    if pid_col not in base_df.columns:
+        return 0
+    pid_clean = base_df[pid_col].astype(str).map(ui.pid)
+    return int((~pid_clean.map(_is_real_pid)).sum())
 
 
 def _merchant_rows(base_df: pd.DataFrame, pid_col: str,
@@ -791,10 +862,18 @@ def _merchant_rows(base_df: pd.DataFrame, pid_col: str,
     '_df'); 'pid_display' is None for groups (renders as a +/- toggle) and the
     cleaned Partner-ID for singles. Every row keeps '_df' — the raw (pre-
     comparison) transaction slice — so the Hochrechnung layer (aggregation.py)
-    can run a Tier-B projection on it directly."""
+    can run a Tier-B projection on it directly.
+
+    Zeilen OHNE Partner-ID sind keine Merchants: echte Worldline-Exporte
+    tragen am Ende eine komplett leere Zeile (alle Spalten NaN), die sonst als
+    Haendler «nan (nan)» in der Liste und in der Hochrechnung auftaucht. Sie
+    wird hier uebersprungen, aber NICHT aus den Daten entfernt -- der Davos-
+    Anker zaehlt 113'497 Zeilen, und sie traegt ohnehin 0 zu jeder Kennzahl
+    bei. _artefact_rows() macht sie sichtbar statt sie zu verschweigen."""
     pid_clean = base_df[pid_col].astype(str).map(ui.pid)
     m = _with_comparison(base_df)
     grouped = {ui.pid(p) for pids in groups.values() for p in pids}
+    real_pids = {p for p in set(pid_clean) if _is_real_pid(p)}
 
     rows: list[dict] = []
     for gname, raw_pids in groups.items():
@@ -820,7 +899,7 @@ def _merchant_rows(base_df: pd.DataFrame, pid_col: str,
         row["members"] = sorted(members, key=lambda r: r["Name"].lower())
         rows.append(row)
 
-    for pv in sorted(set(pid_clean) - grouped):
+    for pv in sorted(real_pids - grouped):
         pmask = pid_clean == pv
         row = _agg_merchant(m[pmask])
         if not row["Name"]:
@@ -884,6 +963,8 @@ def _entity_from_row(r: dict, label: str, key: str, annual_volume: float) -> Ent
         ist_dcc_vol=r.get("_dcc_vol", 0.0), ist_fx_vol=r.get("_fx_vol", 0.0),
         ist_dcc_purchase_vol=r.get("_dcc_vol_purch", 0.0),
         ist_fx_purchase_vol=r.get("_fx_vol_purch", 0.0),
+        ist_sp_asf=r.get("_sp_asf", 0.0),
+        ist_wl_processing=r.get("_wl_processing", 0.0),
     )
 
 
@@ -911,6 +992,8 @@ def _period_entity(label: str, key: str, raw_df: pd.DataFrame, annual_volume: fl
         ist_fx_vol=agg_row.get("_fx_vol", 0.0),
         ist_dcc_purchase_vol=agg_row.get("_dcc_vol_purch", 0.0),
         ist_fx_purchase_vol=agg_row.get("_fx_vol_purch", 0.0),
+        ist_sp_asf=agg_row.get("_sp_asf", 0.0),
+        ist_wl_processing=agg_row.get("_wl_processing", 0.0),
     )
 
 
@@ -1319,14 +1402,35 @@ def page_einstellungen() -> None:
                         vol_key = f"hoch_vol_{rk}"
                         default_vol = (group_vols_db if is_group else partner_vols_db).get(
                             row["Name"] if is_group else row["pid_display"], 0.0)
-                        st.session_state.setdefault(vol_key, default_vol)
-                        annual_vol = c2.number_input(
-                            "Jahresumsatz CHF", min_value=0.0,
-                            step=10000.0, format="%.0f", key=vol_key)
+
+                        # Bei einer Gruppe zuerst nachsehen, ob Mitglieder eigene
+                        # Werte tragen. Dann ist der Gruppen-Lump-Sum per
+                        # Präzedenz wirkungslos (siehe aggregation.py) -- statt
+                        # ein Feld anzubieten, das nichts tut, zeigt die Gruppe
+                        # die SUMME ihrer Mitglieder, schreibgeschützt.
+                        member_sum = 0.0
                         if is_group:
-                            group_updates[row["Name"]] = annual_vol
+                            for mrow in row["members"]:
+                                mk = f"hoch_vol_{rk}_{mrow['pid']}__num"
+                                member_sum += float(st.session_state.get(
+                                    mk, partner_vols_db.get(mrow["pid"], 0.0)))
+
+                        if is_group and member_sum > 0:
+                            c2.text_input("Jahresumsatz CHF",
+                                          value=_fmt_vol(member_sum), disabled=True,
+                                          key=f"{vol_key}__sum_display")
+                            c2.caption("Summe der Mitglieder")
+                            annual_vol = member_sum
+                            # Kein Gruppen-Lump-Sum speichern: die Mitglieder
+                            # tragen den Wert, eine zweite Zahl daneben wäre
+                            # eine stille Doppelspur.
+                            group_updates[row["Name"]] = 0.0
                         else:
-                            partner_updates[row["pid_display"]] = annual_vol
+                            annual_vol = _volume_input(c2, vol_key, default_vol)
+                            if is_group:
+                                group_updates[row["Name"]] = annual_vol
+                            else:
+                                partner_updates[row["pid_display"]] = annual_vol
 
                         member_vols: dict[str, float] = {}
                         if is_group and row["members"]:
@@ -1344,11 +1448,9 @@ def page_einstellungen() -> None:
                                         f"&nbsp;&nbsp;↳ {mrow['Name']} ({mrow['pid']})",
                                         unsafe_allow_html=True)
                                     mkey = f"hoch_vol_{rk}_{mrow['pid']}"
-                                    st.session_state.setdefault(
-                                        mkey, partner_vols_db.get(mrow["pid"], 0.0))
-                                    mv = mc2.number_input(
-                                        "Jahresumsatz CHF", min_value=0.0,
-                                        step=10000.0, format="%.0f", key=mkey,
+                                    mv = _volume_input(
+                                        mc2, mkey,
+                                        partner_vols_db.get(mrow["pid"], 0.0),
                                         label_visibility="collapsed")
                                     partner_updates[mrow["pid"]] = mv
                                     if mv > 0:

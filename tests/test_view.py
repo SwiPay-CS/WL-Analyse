@@ -16,6 +16,8 @@ class _Agg:
     wl_cashback_annual = 58_000.0
     sp_cashback_annual = 77_000.0
     acquiring_advantage_annual = 41_000.0
+    sp_asf_annual = 1_400.0
+    wl_processing_annual = 2_100.0
     dcc_advantage_annual = 19_000.0
     saving_annual = 60_000.0
     dcc_volume_annual = 4_100_000.0
@@ -27,7 +29,8 @@ class _Agg:
 
 
 _T = {"wl_fee": 588.0, "sp_fee": 547.0, "wl_net": 530.0, "sp_net": 470.0,
-      "wl_cashback": 58.0, "sp_cashback": 77.0}
+      "wl_cashback": 58.0, "sp_cashback": 77.0,
+      "sp_asf": 140.0, "wl_processing": 210.0}
 _D = {"brutto": 70_000.0, "n_txn": 600, "avg_ticket": 130.0,
       "dcc_vol": 4_100.0, "fx_vol": 20_900.0,
       "dcc_vol_purch": 4_120.0, "fx_vol_purch": 21_000.0}

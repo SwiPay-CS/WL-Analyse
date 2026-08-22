@@ -109,6 +109,13 @@ class ProjectionResult:
     sp_fee_annual: float = 0.0
     acquiring_advantage_annual: float = 0.0
 
+    # ASF-Ebene: SwiPays einziger variabler Hebel gegen Worldlines Processing
+    # Fee. Fuer den Ø-Satz-Vergleich; NICHT als Zerlegung der Ersparnis lesen
+    # (das Refund-Modell der Engine weicht dort bewusst von Worldlines
+    # gemischten Vorzeichen ab, siehe pipeline.py).
+    sp_asf_annual: float = 0.0
+    wl_processing_annual: float = 0.0
+
     # Volume bases for the DCC view, annual-scaled. See VolumeBases: the net
     # figures carry the utilisation share, the purchase figures carry any
     # cashback-rate arithmetic.
@@ -207,6 +214,8 @@ def project_tier_b(
     sp_dcc = t["sp_cashback"] * scale
     wl_fee = t["wl_fee"]      * scale
     sp_fee = t["sp_fee"]      * scale
+    sp_asf = t["sp_asf"]        * scale
+    wl_pro = t["wl_processing"] * scale
     vb = volume_bases(df)
     n_txn_obs = len(df)
 
@@ -230,6 +239,8 @@ def project_tier_b(
         wl_fee_annual=wl_fee,
         sp_fee_annual=sp_fee,
         acquiring_advantage_annual=wl_fee - sp_fee,
+        sp_asf_annual=sp_asf,
+        wl_processing_annual=wl_pro,
         dcc_volume_annual=vb.dcc_net * scale,
         fx_volume_annual=vb.fx_net * scale,
         dcc_purchase_volume_annual=vb.dcc_purchase * scale,
@@ -264,10 +275,13 @@ def project_tier_a(
     sp_cb_v  = comp["sp_cashback"].to_numpy(float)
     wl_fee_v = comp["wl_fee"].to_numpy(float)
     sp_fee_v = comp["sp_fee"].to_numpy(float)
+    sp_asf_v = comp["sp_asf"].to_numpy(float)
+    wl_pro_v = comp["wl_processing"].to_numpy(float)
 
     wl_net_total = sp_net_total = 0.0
     wl_dcc_total = sp_dcc_total = 0.0
     wl_fee_total = sp_fee_total = 0.0
+    sp_asf_total = wl_pro_total = 0.0
     dcc_vol_total = fx_vol_total = 0.0
     dcc_pur_total = fx_pur_total = 0.0
     total_obs_vol = total_ann_vol = 0.0
@@ -307,6 +321,8 @@ def project_tier_a(
         sp_dcc_total += float(sp_cb_v[b].sum()) * scale
         wl_fee_total += float(wl_fee_v[b].sum()) * scale
         sp_fee_total += float(sp_fee_v[b].sum()) * scale
+        sp_asf_total += float(sp_asf_v[b].sum()) * scale
+        wl_pro_total += float(wl_pro_v[b].sum()) * scale
         n_txn_total  += n_b * scale
         # Volume bases scale per brand, same factor as that brand's CHF metrics.
         vb_b = volume_bases(df[b])
@@ -352,6 +368,8 @@ def project_tier_a(
         wl_fee_annual=wl_fee_total,
         sp_fee_annual=sp_fee_total,
         acquiring_advantage_annual=wl_fee_total - sp_fee_total,
+        sp_asf_annual=sp_asf_total,
+        wl_processing_annual=wl_pro_total,
         dcc_volume_annual=dcc_vol_total,
         fx_volume_annual=fx_vol_total,
         dcc_purchase_volume_annual=dcc_pur_total,

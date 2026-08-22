@@ -13,7 +13,8 @@ from reporter import build_pdf
 from view import BASIS_IST, BASIS_PA, build_view
 
 _T = {"wl_fee": 600.0, "sp_fee": 540.0, "wl_net": 590.0, "sp_net": 520.0,
-      "wl_cashback": 10.0, "sp_cashback": 20.0}
+      "wl_cashback": 10.0, "sp_cashback": 20.0,
+      "sp_asf": 140.0, "wl_processing": 210.0}
 _D = {"brutto": 100_000.0, "n_txn": 900, "n_term": 4, "avg_ticket": 111.0,
       "dcc_vol": 8_000.0, "fx_vol": 40_000.0,
       "dcc_vol_purch": 8_100.0, "fx_vol_purch": 40_400.0}
@@ -31,6 +32,7 @@ def _agg(label: CoverageLabel = CoverageLabel.LOW_COVERAGE) -> AggregateProjecti
         portfolio_coverage_pct=0.6,
         wl_fee_annual=6_000.0, sp_fee_annual=5_400.0,
         acquiring_advantage_annual=600.0,
+        sp_asf_annual=140.0, wl_processing_annual=210.0,
         wl_cashback_annual=100.0, sp_cashback_annual=200.0,
         brutto_annual=1_000_000.0,
         dcc_volume_annual=80_000.0, fx_volume_annual=400_000.0,

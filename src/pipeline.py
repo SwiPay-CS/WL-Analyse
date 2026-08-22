@@ -73,9 +73,38 @@ def run_comparison(
     sp_fee = np.where(offerable, sp_fee, wl_fee)
     sp_cashback = np.where(offerable, sp_cashback, wl_cashback)
 
+    # ASF-Ebene: die EINZIGE Komponente, die SwiPay veraendert -- ICF und CSF
+    # laufen als Pass-through identisch durch (siehe engine.py). Worldlines
+    # Gegenstueck ist die Processing Fee.
+    #
+    # Vorzeichen: sf/ic sind abs-Magnituden, sp_fee ist bei einem Refund aber
+    # NEGATIV. Ein blindes sp_fee - sf - ic wuerde den Pass-through dort
+    # doppelt abziehen. Deshalb traegt der Pass-through das Vorzeichen des
+    # Vorgangs, dann gilt asf = sp_fee - pass_through in JEDEM Fall (bei einem
+    # Refund faellt die ASF korrekt negativ aus = Gutschrift).
+    pass_through = np.where(is_refund, -(sf + ic), sf + ic)
+
+    # Worldline-Processing aus der ROHEN, vorzeichenrichtigen Spalte -- nicht
+    # aus abs-Komponenten (siehe wl_fee oben, gleiche Regel). Negiert, damit
+    # positiv = Kosten.
+    #
+    # Nicht-Vorgaenge ausschliessen: echte Exporte tragen am Ende eine
+    # Summenzeile ohne Betrag und ohne Gebuehren, deren processing_fee die
+    # Summe aller anderen ist (Davos: -22'568.08). Ohne diesen Filter waere
+    # jede Processing-Kennzahl exakt doppelt.
+    pf_raw = df["processing_fee"].fillna(0.0).to_numpy(float)
+    is_txn = (df["brutto"].notna() | df["gebuehren"].notna()).to_numpy(bool)
+    wl_processing = np.where(is_txn, -pf_raw, 0.0)
+
+    # Nicht offerierbare Brands: SwiPay spiegelt Worldline, also auch auf der
+    # ASF-Ebene -- sonst zeigte die Aufschluesselung dort ein Delta, das es
+    # per Definition nicht gibt.
+    sp_asf = np.where(offerable, sp_fee - pass_through, wl_processing)
+
     out = pd.DataFrame({
         "wl_fee": wl_fee, "wl_cashback": wl_cashback, "wl_net": wl_fee - wl_cashback,
         "sp_fee": sp_fee, "sp_cashback": sp_cashback, "sp_net": sp_fee - sp_cashback,
+        "sp_asf": sp_asf, "wl_processing": wl_processing,
         "floored": floored, "offerable": offerable,
     })
     return out
@@ -93,5 +122,7 @@ def totals(result: pd.DataFrame) -> dict[str, float]:
         "sp_cashback": float(result["sp_cashback"].sum()),
         "sp_net": sp_net,
         "saving": wl_net - sp_net,
+        "sp_asf": float(result["sp_asf"].sum()),
+        "wl_processing": float(result["wl_processing"].sum()),
         "n_floored": int(result["floored"].sum()),
     }
