@@ -631,27 +631,33 @@ def page_praesentation() -> None:
         st.altair_chart(ui.chart_dcc_share(v["dcc_vol"], v["fx_vol"]),
                         use_container_width=True)
         st.caption(f"{dcc_share:.0%} des DCC-fähigen Fremdwährungsvolumens "
-                   f"laufen heute als DCC: CHF {chf(v['dcc_vol'], 0)} von "
-                   f"CHF {chf(v['fx_vol'], 0)}.")
+                   f"laufen als DCC: CHF {chf(v['dcc_vol'], 0)} von "
+                   f"CHF {chf(v['fx_vol'], 0)} ({v['note']}, {v['suffix']}).")
     with b:
+        # JEDE Kachel traegt den Basis-Zusatz. Trug nur die erste ihn, lasen
+        # sich die anderen drei wie Ist-Werte, obwohl sie hochgerechnet sind.
+        sfx = v["suffix"]
         ui.kpi_row([
-            {"label": f"Cashback SwiPay {v['suffix']}",
+            {"label": f"Cashback SwiPay {sfx}",
              "value": f"CHF {chf(v['sp_cb'], 0)}",
              "foot": f"{profile.dcc_pct*100:.2f} % auf {dcc_share:.0%} "
                      "Ausschöpfung", "accent": ui.CYAN},
-            {"label": "Cashback bei 100 %",
+            {"label": f"Cashback bei 100 % {sfx}",
              "value": f"CHF {chf(cb_max, 0)}",
              "foot": "theoretische Obergrenze", "accent": ui.BLUE},
         ])
         ui.kpi_row([
-            {"label": "Unrealisiertes Cashback",
+            {"label": f"Unrealisiertes Cashback {sfx}",
              "value": f"CHF {chf(cb_head, 0)}",
-             "foot": f"bei voller Ausschöpfung (+{1 - dcc_share:.0%} Volumen)",
+             "foot": f"+{1 - dcc_share:.0%} Volumen bis zur Obergrenze",
              "accent": ui.ORANGE},
-            {"label": "DCC-Vorteil bei 100 %",
+            {"label": f"DCC-Vorteil bei 100 % {sfx}",
              "value": (f"CHF {chf(dcc_adv_max, 0)}"
                        if dcc_adv_max is not None else "–"),
-             "foot": (f"heute CHF {chf(dccv, 0)} · Satzdifferenz "
+             # "heute" vermieden: der Kontrast ist die Ausschöpfung, nicht die
+             # Zeit -- "heute" liest sich sonst als Ist-Zeitraum.
+             "foot": (f"bei {dcc_share:.0%} Ausschöpfung CHF {chf(dccv, 0)} · "
+                      f"Satzdifferenz "
                       f"{(profile.dcc_pct - wl_dcc_rate) * 100:+.2f} pp"
                       if dcc_adv_max is not None
                       else "kein DCC-Volumen — WL-Satz unbekannt"),
