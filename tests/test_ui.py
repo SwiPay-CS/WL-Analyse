@@ -73,7 +73,7 @@ def test_dcc_share_donut_handles_zero_volume():
 
 # ── Ersparnis nach Kartentyp ──────────────────────────────────────────────────
 
-_TYPE_ORDER = ["Debit", "Credit M/V", "Credit Rest", "Spezial / n/a"]
+_TYPE_ORDER = ["Debit", "Credit M/V", "Credit Rest", "QR-Code / n/a"]
 
 
 def _type_chart_order(rows: list[tuple[str, float]]) -> list[str]:

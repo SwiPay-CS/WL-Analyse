@@ -51,14 +51,17 @@ DB_PATH = str(ROOT / "data" / "swipay.db")
 
 # Einzige Quelle fuer Kartentyp-Namen: Ersparnis-Aufschluesselung, ASF-Eingabe
 # und Brand-Stammliste. Keys sind die Typ-Schluessel aus settings.ALL_TYPES.
+# Der Schluessel bleibt "spezial" (settings.ALL_TYPES, config/brands.json) --
+# nur die Anzeige heisst QR-Code. Ein Schluessel-Rename waere eine Migration
+# der git-versionierten Stammliste ohne funktionalen Gewinn.
 _TYPE_LABEL = {"debit": "Debit", "credit": "Credit M/V",
-               "credit2": "Credit Rest", "spezial": "Spezial"}
+               "credit2": "Credit Rest", "spezial": "QR-Code"}
 _TYPE_KEY = {v: k for k, v in _TYPE_LABEL.items()}   # Label -> Schluessel
 
 # Sammelzeile der Aufschluesselung: "spezial" UND nicht zuordenbare Brands
 # landen hier zusammen. Beide haben per Definition Delta 0 (SwiPay spiegelt
 # Worldline), eine Trennung ergaebe nur zwei Null-Zeilen.
-_TYPE_SPECIAL = "Spezial / n/a"
+_TYPE_SPECIAL = "QR-Code / n/a"
 
 # Feste Anzeigereihenfolge fuer JEDE Kartentyp-Aufschluesselung -- nie nach
 # Betrag sortiert, damit im Kundentermin immer dieselbe Zeile an derselben
@@ -1205,7 +1208,7 @@ def page_einstellungen() -> None:
     with tab_map:
         ui.section("Brand-Stammliste", "git-versioniert · config/brands.json")
         st.caption("Logisches Brand = ein/mehrere Such-Codes (Aliase). Typ steuert die "
-                   "ASF. Spezial-Brands sind nie anbietbar (Worldline 1:1).")
+                   "ASF. QR-Code-Brands sind nie anbietbar (Worldline 1:1).")
         # Typ als Klartext-Label (dieselben Namen wie in der Aufschlüsselung und
         # bei der ASF-Eingabe), nicht als Rohschlüssel. Beim Speichern zurück
         # auf den Schlüssel gemappt.

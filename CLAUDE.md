@@ -108,14 +108,14 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - Kartentyp-Labels und -Reihenfolge sind fix. _TYPE_LABEL in app.py ist die
   EINZIGE Label-Quelle und deckt alle vier Typen aus settings.ALL_TYPES ab:
   Debit, Credit M/V (Mastercard/Visa), Credit Rest (Diners/Discover, JCB,
-  UnionPay), Spezial. Gilt überall, wo ein Typ benannt wird — Ersparnis-
+  UnionPay), QR-Code. Gilt überall, wo ein Typ benannt wird — Ersparnis-
   Aufschlüsselung, ASF-Eingabe und Brand-Stammliste (Einstellungen → Mapping).
   Die Stammliste zeigt Labels und mappt beim Speichern über _TYPE_KEY zurück
   auf den Schlüssel; ein roher Schlüssel wird weiterhin akzeptiert.
-  _TYPE_ORDER = Debit, Credit M/V, Credit Rest, Spezial / n/a. NIE nach Betrag
+  _TYPE_ORDER = Debit, Credit M/V, Credit Rest, QR-Code / n/a. NIE nach Betrag
   sortieren — im Kundentermin muss dieselbe Zeile an derselben Stelle stehen.
 - In der Ersparnis-Aufschlüsselung teilen «spezial» und nicht zuordenbare
-  Brands EINE Sammelzeile «Spezial / n/a» (_type_bucket() in app.py). Beide
+  Brands EINE Sammelzeile «QR-Code / n/a» (_type_bucket() in app.py). Beide
   haben per Definition Delta 0; eine Trennung ergäbe zwei Null-Zeilen.
 - Effektive Gebührenrate: als Prozent vom Bruttoumsatz, NICHT in Basispunkten,
   mit drei Dezimalen (pct_rate()/RATE_DEC in app.py). Zwei Dezimalen ergäben
