@@ -10,6 +10,7 @@ from projection import (
     CoverageTier,
     project_tier_a,
     project_tier_b,
+    volume_bases,
 )
 
 # ---------------------------------------------------------------------------
@@ -237,3 +238,50 @@ def testvolume_bases_are_net_of_refunds():
     r = project_tier_b(df, PARAMS, OFFER, DCC_RATE, annual_volume=100.0)
     assert r.dcc_volume_annual == pytest.approx(60.0)
     assert r.fx_volume_annual == pytest.approx(60.0)
+
+
+# ── Volumen-Basen: netto vs. nur Kaeufe ───────────────────────────────────────
+
+def test_volume_bases_reports_net_and_purchase_separately():
+    """Netto traegt die Ausschoepfungsquote (Davos-Anker), Kaeufe tragen jede
+    Satz-Rechnung. Beide muessen einzeln abrufbar sein."""
+    df = _flat_df([100.0, -40.0, 60.0])
+    df["is_dcc"] = [True, True, True]
+    df["region"] = ["Intra", "Intra", "Intra"]
+    df["is_refund"] = [False, True, False]
+
+    vb = volume_bases(df)
+    assert vb.dcc_net == pytest.approx(120.0)        # 100 - 40 + 60
+    assert vb.fx_net == pytest.approx(120.0)
+    assert vb.dcc_purchase == pytest.approx(160.0)   # 100 + 60, Refund raus
+    assert vb.fx_purchase == pytest.approx(160.0)
+
+
+def test_cashback_rate_resolves_exactly_on_the_purchase_base():
+    """sp_cashback wird nur auf Kaeufe gezahlt. Geteilt durch das KAUF-Volumen
+    muss deshalb exakt der eingestellte Satz herauskommen; auf der Netto-Basis
+    tut es das nicht, weil Zaehler und Nenner verschieden maskiert sind."""
+    df = _flat_df([1_000.0, -250.0, 500.0])
+    df["is_dcc"] = [True, True, True]
+    df["region"] = ["Intra", "Intra", "Intra"]
+    df["is_refund"] = [False, True, False]
+
+    t = totals(run_comparison(df, PARAMS, OFFER, DCC_RATE))
+    vb = volume_bases(df)
+
+    assert t["sp_cashback"] / vb.dcc_purchase == pytest.approx(DCC_RATE, abs=1e-12)
+    # Gegenprobe: die Netto-Basis weicht ab -- genau der behobene Fehler.
+    assert t["sp_cashback"] / vb.dcc_net != pytest.approx(DCC_RATE, abs=1e-6)
+
+
+def test_both_volume_bases_scale_with_the_tier_b_factor():
+    df = _flat_df([200.0, -50.0])
+    df["is_dcc"] = [True, True]
+    df["region"] = ["Intra", "Intra"]
+    df["is_refund"] = [False, True]
+
+    # Kaufvolumen 200 -> Faktor 5 auf einen Jahresumsatz von 1'000.
+    r = project_tier_b(df, PARAMS, OFFER, DCC_RATE, annual_volume=1_000.0)
+    assert r.dcc_volume_annual == pytest.approx(150.0 * 5)          # netto
+    assert r.dcc_purchase_volume_annual == pytest.approx(200.0 * 5)  # Kaeufe
+    assert r.fx_purchase_volume_annual == pytest.approx(200.0 * 5)

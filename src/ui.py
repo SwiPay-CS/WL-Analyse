@@ -345,7 +345,9 @@ def chart_dcc_share(used: float, fx_total: float) -> alt.Chart:
         "order": [0, 1],
     })
     df["Anteil"] = df["Volumen"] / total if total else 0.0
-    df["lbl"] = df["Anteil"].map(lambda x: f"{x:.0%}")
+    # Eine Dezimale, konsistent mit der Ausschoepfungs-Caption daneben: bei
+    # 0 Dezimalen stand hier 20 % und dort 19.7 %.
+    df["lbl"] = df["Anteil"].map(lambda x: f"{x:.1%}")
 
     theta = alt.Theta("Volumen:Q", stack=True, sort=None)
     color = alt.Color("Segment:N", sort=["DCC genutzt", "Nicht genutzt"],

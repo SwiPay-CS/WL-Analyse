@@ -91,9 +91,17 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   DCC BEKOMMT er mehr. Grün/Cyan bei Vorteil, Dunkelrot auf einem Bein, auf dem
   SwiPay schlechter ist.
 - volume_bases() in projection.py ist die EINZIGE Definition von DCC- und
-  Fremdwährungsvolumen (Bildschirm, Projektion, PDF). Netto, also INKLUSIVE
-  Refunds — so sind die Davos-Anker gelockt (fx 4'336'735.23, dcc 905'721.92).
-  Nicht auf «nur Käufe» umstellen, ohne die Anker neu zu vereinbaren.
+  Fremdwährungsvolumen (Bildschirm, Projektion, PDF) und liefert BEIDE Basen
+  (projection.VolumeBases):
+    * netto (Refunds inklusive) — so sind die Davos-Anker gelockt
+      (fx 4'336'735.23, dcc 905'721.92). Trägt die Ausschöpfungsquote und die
+      angezeigten Volumen. Nicht ohne Rücksprache auf «nur Käufe» umstellen.
+    * nur Käufe — Basis JEDER Cashback-Satz-Rechnung, weil sp_cashback in
+      pipeline.py auf ~is_refund maskiert ist. Auf der Netto-Basis ergäbe
+      sp_cashback / dcc_volumen 1.8518 % statt der eingestellten 1.85 %:
+      Zähler und Nenner sässen auf verschiedenen Basen.
+  Die Ausschöpfung wird mit EINER Dezimale angezeigt (Donut-Labels und
+  Caption synchron).
 - Präsentation-Ansicht: _view() in app.py baut EIN Zahlenpaket pro Rendering,
   entweder komplett hochgerechnet oder komplett Ist. Jede Kachel und jedes
   Chart liest nur daraus — nie Ist und p.a. mischen. Umschalter «Hochrechnung
@@ -128,11 +136,15 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   DCC-Cashback (was er BEKOMMT). Beide Deltas sind exakt die zwei Kacheln
   darüber. Kein Wasserfall, kein erklärender Textblock daneben.
 - DCC-Potenzial: «Cashback bei 100 %» ist eine theoretische Obergrenze, keine
-  Prognose, und muss so benannt bleiben. Daneben steht zwingend «DCC-Vorteil
-  bei 100 %» = (SP-Satz - WL-Ø-Satz) x Fremdwährungsvolumen, weil Worldline bei
-  höherer Ausschöpfung ebenfalls mehr Cashback zahlt. Ohne diese Kennzahl liest
-  der Händler das unrealisierte Cashback als Zusatzvorteil — das wäre eine
-  Lüge. Ohne DCC-Volumen ist der WL-Satz unbekannt: dann «–», nicht 0.
+  Prognose, und muss so benannt bleiben. Gerechnet auf dem DCC-fähigen
+  KAUFvolumen, das als eigene Kachel daneben steht («DCC-Kaufvolumen»), damit
+  die Obergrenze nachrechenbar ist.
+  Die Kachel «DCC-Vorteil bei 100 %» wurde 2026-08-22 auf Nutzer-Entscheid
+  entfernt (als hypothetischer Wert nicht relevant genug), zusammen mit dem
+  erklärenden Absatz dazu. Damit fehlt der Seite der Hinweis, dass Worldline
+  bei höherer Ausschöpfung ebenfalls mehr Cashback zahlt — das «unrealisierte
+  Cashback» ist also NICHT der Zusatzvorteil eines Wechsels. Im Kundentermin
+  mündlich einordnen; nicht unkommentiert als Vorteil verkaufen.
 - Fixkosten und IC-Cap-Feinlogik = Phase 6, optional, nur bei konkretem Bedarf.
 
 ## Harter Validierungs-Anker (Davos-Datensatz)

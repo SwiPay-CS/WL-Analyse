@@ -60,8 +60,8 @@ def test_dcc_share_donut_labels_percentages():
     spec = ui.chart_dcc_share(4_118_543.0, 20_904_954.0).to_dict()
     rows = next(r for r in spec["datasets"].values() if r and "Segment" in r[0])
     by_seg = {r["Segment"]: r for r in rows}
-    assert by_seg["DCC genutzt"]["lbl"] == "20%"
-    assert by_seg["Nicht genutzt"]["lbl"] == "80%"
+    assert by_seg["DCC genutzt"]["lbl"] == "19.7%"
+    assert by_seg["Nicht genutzt"]["lbl"] == "80.3%"
 
 
 def test_dcc_share_donut_handles_zero_volume():

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import NamedTuple
 
 import numpy as np
 
@@ -108,45 +109,66 @@ class ProjectionResult:
     sp_fee_annual: float = 0.0
     acquiring_advantage_annual: float = 0.0
 
-    # Volume bases for the DCC utilisation view, annual-scaled. Net of refunds
-    # -- the locked definition behind the Davos anchors (see volume_bases).
-    dcc_volume_annual: float = 0.0
-    fx_volume_annual: float = 0.0
+    # Volume bases for the DCC view, annual-scaled. See VolumeBases: the net
+    # figures carry the utilisation share, the purchase figures carry any
+    # cashback-rate arithmetic.
+    dcc_volume_annual: float = 0.0            # netto (Refunds inklusive)
+    fx_volume_annual: float = 0.0             # netto
+    dcc_purchase_volume_annual: float = 0.0   # nur Kaeufe
+    fx_purchase_volume_annual: float = 0.0    # nur Kaeufe
 
 
 # ---------------------------------------------------------------------------
 # Volume bases
 # ---------------------------------------------------------------------------
 
-def volume_bases(df) -> tuple[float, float]:
-    """(dcc_volume, fx_volume) in CHF -- net of refunds.
+class VolumeBases(NamedTuple):
+    """DCC- und Fremdwaehrungsvolumen auf BEIDEN Basen, die die Seite braucht.
 
-    fx_volume is the DCC-eligible base: every non-domestic clearing region.
-    dcc_volume is the slice of it that actually ran as DCC.
+    dcc_net / fx_net
+        Vorzeichenrichtig, Refunds INKLUSIVE -- also Netto-Volumen. Das ist die
+        gelockte Definition hinter den Davos-Ankern (validate.py: fx
+        4'336'735.23, dcc 905'721.92) und die Basis fuer die
+        Ausschoepfungsquote (dcc_net / fx_net).
 
-    Refunds are INCLUDED (signed), which makes both figures net volumes. That
-    is the locked definition behind the Davos anchors (validate.py: fx_vol
-    4'336'735.23, dcc_vol 905'721.92) and behind _derive() in app.py -- do not
-    switch to a purchases-only basis without re-agreeing those anchors.
+    dcc_purchase / fx_purchase
+        Nur Kaeufe. Cashback wird ausschliesslich auf Kaeufe gezahlt (siehe
+        pipeline.run_comparison: sp_cashback ist auf ~is_refund maskiert), also
+        MUSS jede Satz-Rechnung (Cashback / Volumen) auf dieser Basis laufen.
+        Auf der Netto-Basis ergaebe sp_cashback / dcc_net 1.8518 % statt der
+        eingestellten 1.85 % -- Zaehler und Nenner sassen auf verschiedenen
+        Basen.
 
-    Scaling a net volume by the purchase-volume-anchored Tier-B factor stays
-    proportional, so the projected figure keeps the same net semantics.
+    Beide skalieren unter Tier B mit demselben Faktor, behalten also ihre
+    Semantik in der Hochrechnung.
     """
+    dcc_net: float
+    fx_net: float
+    dcc_purchase: float
+    fx_purchase: float
+
+
+def volume_bases(df) -> VolumeBases:
+    """DCC- und Fremdwaehrungsvolumen, netto und nur-Kaeufe (siehe VolumeBases)."""
     brutto = df["brutto"].to_numpy(float)
+    purch  = ~df["is_refund"].to_numpy(bool)
 
     if "is_dcc" in df.columns:
-        dcc_vol = float(np.nansum(brutto[df["is_dcc"].to_numpy(bool)]))
+        dcc = df["is_dcc"].to_numpy(bool)
+        dcc_net = float(np.nansum(brutto[dcc]))
+        dcc_pur = float(np.nansum(brutto[dcc & purch]))
     else:
-        dcc_vol = 0.0
+        dcc_net = dcc_pur = 0.0
 
     if "region" in df.columns:
         r = df["region"].astype(str).str.strip().str.lower()
-        foreign = ((r != "domestic") & r.ne("nan")).to_numpy(bool)
-        fx_vol = float(np.nansum(brutto[foreign]))
+        fx = ((r != "domestic") & r.ne("nan")).to_numpy(bool)
+        fx_net = float(np.nansum(brutto[fx]))
+        fx_pur = float(np.nansum(brutto[fx & purch]))
     else:
-        fx_vol = 0.0
+        fx_net = fx_pur = 0.0
 
-    return dcc_vol, fx_vol
+    return VolumeBases(dcc_net, fx_net, dcc_pur, fx_pur)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +207,7 @@ def project_tier_b(
     sp_dcc = t["sp_cashback"] * scale
     wl_fee = t["wl_fee"]      * scale
     sp_fee = t["sp_fee"]      * scale
-    dcc_vol, fx_vol = volume_bases(df)
+    vb = volume_bases(df)
     n_txn_obs = len(df)
 
     coverage = CoverageTier.classify(obs_vol, annual_volume)
@@ -208,8 +230,10 @@ def project_tier_b(
         wl_fee_annual=wl_fee,
         sp_fee_annual=sp_fee,
         acquiring_advantage_annual=wl_fee - sp_fee,
-        dcc_volume_annual=dcc_vol * scale,
-        fx_volume_annual=fx_vol * scale,
+        dcc_volume_annual=vb.dcc_net * scale,
+        fx_volume_annual=vb.fx_net * scale,
+        dcc_purchase_volume_annual=vb.dcc_purchase * scale,
+        fx_purchase_volume_annual=vb.fx_purchase * scale,
     )
 
 
@@ -245,6 +269,7 @@ def project_tier_a(
     wl_dcc_total = sp_dcc_total = 0.0
     wl_fee_total = sp_fee_total = 0.0
     dcc_vol_total = fx_vol_total = 0.0
+    dcc_pur_total = fx_pur_total = 0.0
     total_obs_vol = total_ann_vol = 0.0
     n_txn_obs_total = 0
     n_txn_total = 0.0
@@ -284,9 +309,11 @@ def project_tier_a(
         sp_fee_total += float(sp_fee_v[b].sum()) * scale
         n_txn_total  += n_b * scale
         # Volume bases scale per brand, same factor as that brand's CHF metrics.
-        b_dcc, b_fx = volume_bases(df[b])
-        dcc_vol_total += b_dcc * scale
-        fx_vol_total  += b_fx  * scale
+        vb_b = volume_bases(df[b])
+        dcc_vol_total += vb_b.dcc_net * scale
+        fx_vol_total  += vb_b.fx_net  * scale
+        dcc_pur_total += vb_b.dcc_purchase * scale
+        fx_pur_total  += vb_b.fx_purchase  * scale
 
     # Mix plausibility: compare share of brands that have annual data.
     total_ann_prov = sum(annual_by_brand.values()) or 1.0
@@ -327,4 +354,6 @@ def project_tier_a(
         acquiring_advantage_annual=wl_fee_total - sp_fee_total,
         dcc_volume_annual=dcc_vol_total,
         fx_volume_annual=fx_vol_total,
+        dcc_purchase_volume_annual=dcc_pur_total,
+        fx_purchase_volume_annual=fx_pur_total,
     )

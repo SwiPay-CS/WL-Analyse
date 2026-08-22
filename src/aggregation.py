@@ -52,8 +52,10 @@ class EntityInput:
     ist_sp_fee: float = 0.0
     ist_wl_cashback: float = 0.0
     ist_sp_cashback: float = 0.0
-    ist_dcc_vol: float = 0.0       # genutztes DCC-Volumen (Kaeufe)
-    ist_fx_vol: float = 0.0        # DCC-faehiges Fremdwaehrungsvolumen (Kaeufe)
+    ist_dcc_vol: float = 0.0       # genutztes DCC-Volumen, netto
+    ist_fx_vol: float = 0.0        # DCC-faehiges Fremdwaehrungsvolumen, netto
+    ist_dcc_purchase_vol: float = 0.0  # dieselben Volumen, nur Kaeufe --
+    ist_fx_purchase_vol: float = 0.0   # Basis fuer jede Cashback-Satz-Rechnung
 
 
 @dataclass
@@ -85,8 +87,12 @@ class AggregateProjection:
     # Das ist der einzig korrekte Nenner fuer eine effektive Gebuehrenrate,
     # weil der Zaehler dieselbe Mischung enthaelt.
     brutto_annual: float = 0.0
+    # Netto-Volumen (Ausschoepfungsquote) und Kauf-Volumen (Satz-Rechnungen) --
+    # siehe projection.VolumeBases.
     dcc_volume_annual: float = 0.0
     fx_volume_annual: float = 0.0
+    dcc_purchase_volume_annual: float = 0.0
+    fx_purchase_volume_annual: float = 0.0
 
     used: list[str] = field(default_factory=list)       # hochgerechnete Entities
     skipped: list[str] = field(default_factory=list)     # Ist uebernommen
@@ -127,6 +133,7 @@ def aggregate(
     wl = sp = dcc_adv = txn = 0.0
     wl_fee = sp_fee = wl_cb = sp_cb = 0.0
     brutto_eff = dcc_vol = fx_vol = 0.0
+    dcc_pur = fx_pur = 0.0
     proj_saving = 0.0
     obs_vol_sum = ann_vol_sum = 0.0
     covered_brutto = total_brutto = 0.0
@@ -160,6 +167,8 @@ def aggregate(
             brutto_eff += proj.annual_volume
             dcc_vol += proj.dcc_volume_annual
             fx_vol += proj.fx_volume_annual
+            dcc_pur += proj.dcc_purchase_volume_annual
+            fx_pur += proj.fx_purchase_volume_annual
             proj_saving += proj.saving_annual
             obs_vol_sum += proj.observed_volume
             ann_vol_sum += proj.annual_volume
@@ -181,6 +190,8 @@ def aggregate(
             brutto_eff += e.ist_brutto
             dcc_vol += e.ist_dcc_vol
             fx_vol += e.ist_fx_vol
+            dcc_pur += e.ist_dcc_purchase_vol
+            fx_pur += e.ist_fx_purchase_vol
             skipped.append(e.label)
 
     saving = wl - sp
@@ -215,6 +226,8 @@ def aggregate(
         brutto_annual=brutto_eff,
         dcc_volume_annual=dcc_vol,
         fx_volume_annual=fx_vol,
+        dcc_purchase_volume_annual=dcc_pur,
+        fx_purchase_volume_annual=fx_pur,
         used=used,
         skipped=skipped,
         duplicate_groups=_duplicate_clusters(entities),

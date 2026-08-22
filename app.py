@@ -151,14 +151,15 @@ def _derive(fdf: pd.DataFrame, comp: pd.DataFrame, t: dict) -> dict:
     is_p = ~fdf["is_refund"]
     brutto = float(b[is_p].sum())
     n_p = int(is_p.sum())
-    dcc_vol, fx_vol = volume_bases(fdf)
+    vb = volume_bases(fdf)
     return {
         "brutto": brutto, "n_txn": len(fdf), "n_purch": n_p,
         "n_term": int(fdf["terminal_id"].nunique()) if "terminal_id" in fdf else 0,
         "avg_ticket": brutto / n_p if n_p else 0.0,
         "diff": t["wl_net"] - t["sp_net"],
         "dcc_adv": t["sp_cashback"] - t["wl_cashback"],
-        "dcc_vol": dcc_vol, "fx_vol": fx_vol,
+        "dcc_vol": vb.dcc_net, "fx_vol": vb.fx_net,
+        "dcc_vol_purch": vb.dcc_purchase, "fx_vol_purch": vb.fx_purchase,
     }
 
 
@@ -198,6 +199,8 @@ def _view(agg, t: dict, d: dict, basis: str) -> dict:
             "total": agg.saving_annual,
             "dcc_vol": agg.dcc_volume_annual,
             "fx_vol": agg.fx_volume_annual,
+            "dcc_vol_purch": agg.dcc_purchase_volume_annual,
+            "fx_vol_purch": agg.fx_purchase_volume_annual,
             "band_low": agg.band_low, "band_high": agg.band_high,
         }
     else:
@@ -215,6 +218,8 @@ def _view(agg, t: dict, d: dict, basis: str) -> dict:
             "total": t["wl_net"] - t["sp_net"],
             "dcc_vol": d["dcc_vol"],
             "fx_vol": d["fx_vol"],
+            "dcc_vol_purch": d["dcc_vol_purch"],
+            "fx_vol_purch": d["fx_vol_purch"],
             "band_low": None, "band_high": None,
         }
 
@@ -613,34 +618,31 @@ def page_praesentation() -> None:
 
     # ── DCC ───────────────────────────────────────────────────────────────────
     ui.section("DCC", f"Cashback heute und Ausschöpfungs-Potenzial · {v['suffix']}")
+    # Ausschoepfungsquote auf der NETTO-Basis: so sind die Davos-Anker gelockt
+    # (fx 4'336'735.23, dcc 905'721.92) und so stehen die Volumen in der
+    # Caption.
     dcc_share = (v["dcc_vol"] / v["fx_vol"]) if v["fx_vol"] else 0.0
-    # Obergrenze: derselbe SwiPay-Satz auf das GANZE DCC-fähige Volumen. Das
-    # ist eine theoretische Grenze, keine Prognose -- 100 % Ausschöpfung setzt
-    # voraus, dass jeder Karteninhaber DCC annimmt. Wird als solche benannt.
-    cb_max = profile.dcc_pct * v["fx_vol"]
+    # Obergrenze dagegen auf der KAUF-Basis: Cashback wird nur auf Kaeufe
+    # gezahlt (siehe projection.VolumeBases). Auf der Netto-Basis ergaebe
+    # sp_cashback / dcc_volumen 1.8518 % statt der eingestellten 1.85 % --
+    # Zaehler und Nenner sassen auf verschiedenen Basen.
+    cb_max = profile.dcc_pct * v["fx_vol_purch"]
     cb_head = cb_max - v["sp_cb"]
-    # Bei hoeherer Ausschoepfung zahlt WORLDLINE ebenfalls mehr Cashback. Der
-    # Vorteil waechst deshalb nur um die Satzdifferenz, nicht um den ganzen
-    # Cashback -- sonst waere die Zahl im Kundentermin eine Luege. Ohne
-    # DCC-Volumen ist der WL-Satz unbekannt: dann None, nicht 0.
-    wl_dcc_rate = (v["wl_cb"] / v["dcc_vol"]) if v["dcc_vol"] else None
-    dcc_adv_max = ((profile.dcc_pct - wl_dcc_rate) * v["fx_vol"]
-                   if wl_dcc_rate is not None else None)
     a, b = st.columns([1, 1.35])
     with a:
         st.altair_chart(ui.chart_dcc_share(v["dcc_vol"], v["fx_vol"]),
                         use_container_width=True)
-        st.caption(f"{dcc_share:.0%} des DCC-fähigen Fremdwährungsvolumens "
+        st.caption(f"{dcc_share:.1%} des DCC-fähigen Fremdwährungsvolumens "
                    f"laufen als DCC: CHF {chf(v['dcc_vol'], 0)} von "
                    f"CHF {chf(v['fx_vol'], 0)} ({v['note']}, {v['suffix']}).")
     with b:
         # JEDE Kachel traegt den Basis-Zusatz. Trug nur die erste ihn, lasen
-        # sich die anderen drei wie Ist-Werte, obwohl sie hochgerechnet sind.
+        # sich die anderen wie Ist-Werte, obwohl sie hochgerechnet sind.
         sfx = v["suffix"]
         ui.kpi_row([
             {"label": f"Cashback SwiPay {sfx}",
              "value": f"CHF {chf(v['sp_cb'], 0)}",
-             "foot": f"{profile.dcc_pct*100:.2f} % auf {dcc_share:.0%} "
+             "foot": f"{profile.dcc_pct*100:.2f} % auf {dcc_share:.1%} "
                      "Ausschöpfung", "accent": ui.CYAN},
             {"label": f"Cashback bei 100 % {sfx}",
              "value": f"CHF {chf(cb_max, 0)}",
@@ -649,28 +651,17 @@ def page_praesentation() -> None:
         ui.kpi_row([
             {"label": f"Unrealisiertes Cashback {sfx}",
              "value": f"CHF {chf(cb_head, 0)}",
-             "foot": f"+{1 - dcc_share:.0%} Volumen bis zur Obergrenze",
+             "foot": f"+{1 - dcc_share:.1%} Volumen bis zur Obergrenze",
              "accent": ui.ORANGE},
-            {"label": f"DCC-Vorteil bei 100 % {sfx}",
-             "value": (f"CHF {chf(dcc_adv_max, 0)}"
-                       if dcc_adv_max is not None else "–"),
-             # "heute" vermieden: der Kontrast ist die Ausschöpfung, nicht die
-             # Zeit -- "heute" liest sich sonst als Ist-Zeitraum.
-             "foot": (f"bei {dcc_share:.0%} Ausschöpfung CHF {chf(dccv, 0)} · "
-                      f"Satzdifferenz "
-                      f"{(profile.dcc_pct - wl_dcc_rate) * 100:+.2f} pp"
-                      if dcc_adv_max is not None
-                      else "kein DCC-Volumen — WL-Satz unbekannt"),
-             "accent": ui.GREEN if (dcc_adv_max or 0) >= 0 else ui.ROT},
+            {"label": f"DCC-Kaufvolumen {sfx}",
+             "value": f"CHF {chf_c(v['fx_vol_purch'])}",
+             "foot": "DCC-fähig, Basis der Obergrenze",
+             "accent": ui.ANTHRAZIT},
         ])
     st.caption(
         "«Cashback bei 100 %» rechnet den SwiPay-Satz auf das gesamte "
-        "DCC-fähige Volumen — eine Obergrenze, keine Prognose: volle "
-        "Ausschöpfung setzt voraus, dass jeder Karteninhaber DCC annimmt. "
-        "Wichtig für den Vergleich: bei höherer Ausschöpfung zahlt Worldline "
-        "ebenfalls mehr Cashback. Der **Vorteil** gegenüber Worldline wächst "
-        "deshalb nur mit der Satzdifferenz — das ist die Kennzahl "
-        "«DCC-Vorteil bei 100 %», nicht das unrealisierte Cashback-Potenzial.")
+        "DCC-fähige Kaufvolumen — eine Obergrenze, keine Prognose: volle "
+        "Ausschöpfung setzt voraus, dass jeder Karteninhaber DCC annimmt.")
 
     # ── Zeit & Verteilung ──────────────────────────────────────────────────────
     # Bewusst immer Ist: ein Monatsverlauf lässt sich nicht hochrechnen, ohne
@@ -835,7 +826,7 @@ def _agg_merchant(sub: pd.DataFrame) -> dict:
     """
     pu = sub[~sub["is_refund"]]
     n = len(pu)
-    dcc_vol, fx_vol = volume_bases(sub)
+    vb = volume_bases(sub)
     return {
         "Name": str(sub["partner_name"].iloc[0]) if "partner_name" in sub and n else "",
         "Umsatz": round(float(pu["brutto"].sum()), 2), "Txn": len(sub),
@@ -848,8 +839,10 @@ def _agg_merchant(sub: pd.DataFrame) -> dict:
         "_sp_fee": float(sub["sp_fee"].sum()),
         "_wl_cb": float(sub["wl_cb"].sum()),
         "_sp_cb": float(sub["sp_cb"].sum()),
-        "_dcc_vol": dcc_vol,
-        "_fx_vol": fx_vol,
+        "_dcc_vol": vb.dcc_net,
+        "_fx_vol": vb.fx_net,
+        "_dcc_vol_purch": vb.dcc_purchase,
+        "_fx_vol_purch": vb.fx_purchase,
     }
 
 
@@ -962,6 +955,8 @@ def _entity_from_row(r: dict, label: str, key: str, annual_volume: float) -> Ent
         ist_wl_fee=r.get("_wl_fee", 0.0), ist_sp_fee=r.get("_sp_fee", 0.0),
         ist_wl_cashback=r.get("_wl_cb", 0.0), ist_sp_cashback=r.get("_sp_cb", 0.0),
         ist_dcc_vol=r.get("_dcc_vol", 0.0), ist_fx_vol=r.get("_fx_vol", 0.0),
+        ist_dcc_purchase_vol=r.get("_dcc_vol_purch", 0.0),
+        ist_fx_purchase_vol=r.get("_fx_vol_purch", 0.0),
     )
 
 
@@ -987,6 +982,8 @@ def _period_entity(label: str, key: str, raw_df: pd.DataFrame, annual_volume: fl
         ist_sp_cashback=agg_row.get("_sp_cb", 0.0),
         ist_dcc_vol=agg_row.get("_dcc_vol", 0.0),
         ist_fx_vol=agg_row.get("_fx_vol", 0.0),
+        ist_dcc_purchase_vol=agg_row.get("_dcc_vol_purch", 0.0),
+        ist_fx_purchase_vol=agg_row.get("_fx_vol_purch", 0.0),
     )
 
 
