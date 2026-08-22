@@ -423,18 +423,13 @@ def page_praesentation() -> None:
         # Minus = Gebühren sinken = grün. Die Farbe sitzt hier auf der ZAHL,
         # weil das Vorzeichen die eigentliche Aussage der Kachel ist.
         tone_chg = ui.GREEN if v.rel_pct >= 0 else ui.ROT
-        # Ø ASF gegen Worldlines Processing Fee: der einzige variable Hebel
-        # (ICF/CSF laufen als Pass-through identisch durch). Ein SATZVERGLEICH,
-        # keine Zerlegung der Ersparnis -- siehe ViewNumbers.asf_rate.
-        asf_foot = ("vs. Worldline" if v.asf_rate is None else
-                    f"Ø ASF {pct_rate(v.asf_rate)} vs. WL "
-                    f"{pct_rate(v.wl_processing_rate)}")
         ui.kpi_row([
             {"label": f"Bruttoumsatz {v.suffix}",
              "value": f"CHF {chf_c(v.brutto)}",
              "foot": v.note, "accent": ui.BLUE},
             {"label": "Gebührenveränderung", "value": chg_txt,
-             "foot": asf_foot, "accent": tone_chg, "value_color": tone_chg},
+             "foot": "vs. Worldline", "accent": tone_chg,
+             "value_color": tone_chg},
         ])
         # Effektive Gebührenrate in % vom Umsatz -- vergleichbar mit jedem
         # anderen Angebot, unabhängig von der Umsatzgrösse.
@@ -442,17 +437,24 @@ def page_praesentation() -> None:
             dlt = v.rate_delta
             # Richtung ausschreiben: ein nacktes "+0.085" liest sich, als wäre
             # SwiPay teurer, obwohl es die Ersparnis ist.
-            # %-Punkte, nicht %. Die relative Veränderung steht bereits in
-            # der Kachel «Gebührenveränderung» -- hier nur die Ratendifferenz,
-            # sonst dieselbe Zahl zweimal.
-            rate_foot = ("gleiche Rate" if abs(dlt) < 5e-6 else
-                         f"{pp(dlt)} günstiger" if dlt > 0 else
-                         f"{pp(-dlt)} teurer")
+            # Gross die Gesamtrate (Disagio), klein darunter die Komponente,
+            # die den Unterschied macht: SwiPays ASF gegen Worldlines
+            # Processing Fee. ICF/CSF laufen als Pass-through identisch durch,
+            # deshalb ist das der einzige variable Hebel. Bewusst NICHT «davon»
+            # genannt -- die Gesamtrate ist netto nach DCC-Cashback, die ASF
+            # ist also kein reiner Teilbetrag davon.
+            sav_txt = (f"{v.rel_pct:.1f} % gespart" if v.rel_pct >= 0
+                       else f"{abs(v.rel_pct):.1f} % teurer")
+            wl_asf_foot = (f"Ø Processing {pct_rate(v.wl_processing_rate)}"
+                           if v.wl_processing_rate is not None
+                           else "vom Bruttoumsatz")
+            sp_asf_foot = (f"Ø ASF {pct_rate(v.asf_rate)} · {sav_txt}"
+                           if v.asf_rate is not None else sav_txt)
             ui.kpi_row([
                 {"label": "Gebühren Total WL", "value": pct_rate(v.wl_rate),
-                 "foot": "vom Bruttoumsatz", "accent": ui.ANTHRAZIT},
+                 "foot": wl_asf_foot, "accent": ui.ANTHRAZIT},
                 {"label": "Gebühren Total SwiPay",
-                 "value": pct_rate(v.sp_rate), "foot": rate_foot,
+                 "value": pct_rate(v.sp_rate), "foot": sp_asf_foot,
                  "accent": ui.GREEN if dlt >= 0 else ui.ROT},
             ])
         ui.kpi_row([

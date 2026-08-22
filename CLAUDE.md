@@ -173,13 +173,16 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - Gebührenveränderung (Kachel): zeigt die Richtung der GEBÜHREN, nicht der
   Ersparnis — Minus = Gebühren sinken = grün, Plus = rot. Die Farbe sitzt hier
   auf der ZAHL (ui.kpi_row akzeptiert value_color); sparsam einsetzen, sonst
-  verliert Farbe ihre Signalwirkung. Fussnote ist der Ø-SATZVERGLEICH auf der
-  ASF-Ebene: sp_asf/brutto gegen wl_processing/brutto. Das ist SwiPays einziger
-  variabler Hebel (ICF/CSF laufen als Pass-through identisch durch), aber
-  KEINE Zerlegung der Ersparnis — auf Refunds modelliert die Engine eine volle
-  Umkehr mit abs-Komponenten, Worldline bucht dort gemischte Vorzeichen
-  (Davos: CHF 175 Differenz auf CHF 8'561 Ersparnis). Nie als «davon aus der
-  ASF» beschriften.
+  verliert Farbe ihre Signalwirkung. Fussnote nur «vs. Worldline».
+- Die beiden Gebühren-Total-Kacheln tragen GROSS die Gesamtrate (Disagio) und
+  KLEIN die Komponente, die den Unterschied macht: WL «Ø Processing x %»,
+  SwiPay «Ø ASF x % · y % gespart». Das ist SwiPays einziger variabler Hebel
+  (ICF/CSF laufen als Pass-through identisch durch), aber KEINE Zerlegung der
+  Ersparnis — auf Refunds modelliert die Engine eine volle Umkehr mit
+  abs-Komponenten, Worldline bucht dort gemischte Vorzeichen (Davos: CHF 175
+  Differenz auf CHF 8'561 Ersparnis). Deshalb NICHT «davon» schreiben; die
+  Gesamtrate ist zudem netto nach DCC-Cashback, die ASF also kein reiner
+  Teilbetrag davon.
 - Datenartefakte im Worldline-Export (Davos, gilt generell):
   * Die LETZTE Zeile ist eine SUMMENZEILE: kein Betrag, keine Gebühren, aber
     processing_fee = Summe aller anderen (-22'568.08). pipeline.py filtert sie
