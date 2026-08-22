@@ -117,13 +117,24 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   (Hero + Acquiring/DCC/Total) · zwei Vergleiche · Kennzahlen; Seite 2
   Kartentyp · DCC · Grundlage der Hochrechnung · Datenhinweise. Zwei feste
   Seitenumbrüche, kein Auto-Break mitten in einer Sektion.
-- PDF-Kopf: das ECHTE Logo (assets/SWIPAY-Logo.svg, via pdf.image(), fpdf2
-  kann SVG direkt) auf WEISSEM Header, 34 mm breit, 8 mm Freiraum zum Titel.
-  Kein dunkler Balken mehr: die Wortmarke im Logo ist selbst anthrazit und
-  wäre darauf unsichtbar, und Brand & CI v2.1 verbietet Farbänderungen am Logo
-  ausdrücklich («Logo-Grundregeln»: keine Farbänderungen, Mindestgrösse 25 mm
-  Print, Freiraum 8 mm). Titel: «SwiPay Payment Benchmarking». Roter
-  Akzent-Strich statt Farbfläche.
+- PDF-Kopf: dunkler Anthrazit-Balken, darauf das NEGATIV-Logo. Gesucht wird
+  assets/SWIPAY-Logo-negativ.svg|.png (weitere Namen siehe
+  _LOGO_NEG_CANDIDATES in reporter.py), SVG bevorzugt. Fehlt die Datei, greift
+  eine weisse Wortmarke als Type — das ist Satz, kein umgefärbtes Logo.
+  Das Positiv-Logo (assets/SWIPAY-Logo.svg) darf NIE auf den dunklen Balken:
+  seine Wortmarke ist selbst anthrazit, und Brand & CI v2.1 verbietet
+  Farbänderungen am Logo ausdrücklich («Logo-Grundregeln»: keine
+  Farbänderungen, Mindestgrösse 25 mm Print, Freiraum 8 mm — beides
+  eingehalten: 34 mm breit, 8 mm Abstand). Titel: «Payment Benchmarking»
+  (ohne «SwiPay», das steht schon im Logo).
+- PDF-Schrift ist Saira, die Hausschrift. Die TTFs liegen IM Repo unter
+  assets/fonts/ (SIL OFL 1.1), damit das PDF überall gleich rendert. _F ist die
+  Textfamilie (Regular/Bold/Italic), _FXB die ExtraBold-Familie für die grossen
+  Zahlen — fpdf2 führt je Familie nur "", "B", "I", "BI". Fehlen die TTFs,
+  fällt reporter.py auf Helvetica zurück UND setzt core_fonts_encoding auf
+  cp1252; ohne das bricht der Ersatzpfad an Gedankenstrich und «», weil
+  Latin-1 sie nicht kennt (ein Test sichert das ab). _safe() ist seit Saira
+  eine Identitätsfunktion — Schweizer Typografie läuft unverändert durch.
 - PDF-Fussnote: «SwiPay AG · Vertraulich - nur für autorisierte Empfänger ·
   Alle Angaben ohne Gewähr». NICHT «für den internen Gebrauch» — das Dokument
   geht an den Händler.

@@ -106,3 +106,36 @@ def test_all_data_hints_render_together():
                     mix_hints=["Visa: share 20 % observed vs 35 % annual"],
                     **_META)
     assert pdf[:4] == b"%PDF"
+
+
+# ── Schrift: Saira und der Ersatz-Pfad ────────────────────────────────────────
+
+def test_saira_faces_are_bundled_in_the_repo():
+    """Die TTFs liegen bewusst IM Repo, damit das PDF ueberall gleich rendert
+    und nicht vom persoenlich installierten Font-Ordner abhaengt."""
+    import reporter
+    for fname in reporter._SAIRA_FACES.values():
+        assert (reporter._FONTS / fname).exists(), fname
+
+
+def test_renders_without_the_saira_files(monkeypatch, tmp_path):
+    """Fehlen die TTFs, muss der Bericht in der Ersatzschrift entstehen statt
+    zu crashen -- inklusive Gedankenstrich und «», die Latin-1 nicht kennt.
+    Genau daran ist der Fallback beim Bauen zerbrochen."""
+    import reporter
+    monkeypatch.setattr(reporter, "_FONTS", tmp_path / "keine-fonts")
+    v = build_view(_agg(), _T, _D, BASIS_IST)
+    pdf = build_pdf(view=v, savings_by_type=_TYPES,
+                    zero_effect_brands=["TWINT"], **_META)
+    assert pdf[:4] == b"%PDF"
+
+
+def test_umlauts_and_guillemets_survive_both_font_paths(monkeypatch, tmp_path):
+    import reporter
+    v = build_view(_agg(), _T, _D, BASIS_IST)
+    meta = {k: val for k, val in _META.items() if k != "partner_name"}
+    kw = dict(view=v, partner_name="Ötzi «Test» AG Zürich",
+              savings_by_type=_TYPES, zero_effect_brands=["TWINT"], **meta)
+    assert build_pdf(**kw)[:4] == b"%PDF"
+    monkeypatch.setattr(reporter, "_FONTS", tmp_path / "keine-fonts")
+    assert build_pdf(**kw)[:4] == b"%PDF"

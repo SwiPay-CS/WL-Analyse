@@ -37,6 +37,22 @@ _DIM        = (138, 148, 149)   # ≈ rgba(62,75,76,.62)
 _FAINT      = (170, 175, 176)   # ≈ rgba(62,75,76,.42)
 
 _ASSETS = Path(__file__).resolve().parent.parent / "assets"
+_FONTS  = _ASSETS / "fonts"
+
+# Saira ist die Hausschrift (Brand & CI v2.1). Die TTFs liegen im Repo, damit
+# das PDF ueberall gleich rendert. _F ist die Textfamilie (Regular/Bold/
+# Italic), _FXB die ExtraBold-Familie fuer die grossen Zahlen -- fpdf2 fuehrt
+# je Familie nur "", "B", "I", "BI", ExtraBold braucht deshalb eine eigene.
+_F   = "Saira"
+_FXB = "SairaXB"
+_FALLBACK = "Helvetica"   # nur falls die TTFs fehlen
+
+_SAIRA_FACES = {
+    (_F, ""):   "Saira-Regular.ttf",
+    (_F, "B"):  "Saira-Bold.ttf",
+    (_F, "I"):  "Saira-Italic.ttf",
+    (_FXB, ""): "Saira-ExtraBold.ttf",
+}
 
 _BADGE_COLORS = {
     CoverageLabel.SIMULATABLE:  _GREEN_CI,
@@ -65,78 +81,115 @@ def _pp(frac: float) -> str:
 
 
 def _safe(text: str) -> str:
-    """Sanitize string to Latin-1 for Helvetica (fpdf2 built-in font)."""
-    return (
-        text
-        .replace("–", "-")   # en-dash
-        .replace("—", "-")   # em-dash
-        .replace("’", "'")   # right single quote
-        .replace("“", '"').replace("”", '"')
-        .replace("…", "...")  # ellipsis
-        .replace("•", "*")   # bullet
-    )
+    """Identity since the report embeds Saira (a Unicode TTF).
+
+    Bleibt als Funktion bestehen, weil sie an vielen Stellen aufgerufen wird
+    und die Absicht dokumentiert: hier stand die Latin-1-Bereinigung fuer
+    Helvetica, die Gedankenstriche und «» verstuemmelt hat. Mit Saira ist das
+    unnoetig -- Schweizer Typografie laeuft unveraendert durch.
+    """
+    return text
+
+
+def _register_fonts(pdf: FPDF) -> tuple[str, str]:
+    """Saira-Schnitte registrieren. Gibt (Textfamilie, ExtraBold-Familie)
+    zurueck -- bei fehlenden TTFs beide als Helvetica, damit ein Bericht
+    lieber in der Ersatzschrift entsteht als gar nicht."""
+    # cp1252 statt latin-1 fuer die Kernschriften: es deckt Gedankenstrich,
+    # «», Bullet und Auslassungspunkte ab. Ohne das bricht der Fallback-Pfad
+    # an genau der Typografie, die mit Saira korrekt ist.
+    pdf.core_fonts_encoding = "cp1252"
+    missing = [f for f in _SAIRA_FACES.values() if not (_FONTS / f).exists()]
+    if missing:
+        return _FALLBACK, _FALLBACK
+    for (family, style), fname in _SAIRA_FACES.items():
+        pdf.add_font(family, style, str(_FONTS / fname))
+    return _F, _FXB
 
 
 # ── PDF base class ────────────────────────────────────────────────────────────
+
+# Negativ-Logo (weisse Wortmarke) fuer den dunklen Header-Balken. Wird in
+# dieser Reihenfolge gesucht; SVG bevorzugt, weil es als Vektor skaliert.
+# WICHTIG: nie das Positiv-Logo umfaerben -- Brand & CI v2.1, "Logo-
+# Grundregeln": keine Farbaenderungen. Deshalb eine eigene Datei.
+_LOGO_NEG_CANDIDATES = (
+    "SWIPAY-Logo-negativ.svg", "SWIPAY-Logo-negativ.png",
+    "SWIPAY-Logo-negative.svg", "SWIPAY-Logo-negative.png",
+    "SWIPAY-Logo-weiss.svg", "SWIPAY-Logo-weiss.png",
+)
+
+
+def _negative_logo() -> Path | None:
+    for name in _LOGO_NEG_CANDIDATES:
+        cand = _ASSETS / name
+        if cand.exists():
+            return cand
+    return None
+
 
 class _SwiPayPDF(FPDF):
     """FPDF subclass with the SwiPay CI header and footer."""
 
     generated_date: str = ""
+    # Von _register_fonts() gesetzt; Default haelt header()/footer() lauffaehig,
+    # falls die Saira-TTFs fehlen.
+    fam: str = _FALLBACK
+    fam_xb: str = _FALLBACK
 
-    # Brand rules (Brand & CI v2.1, "Logo-Grundregeln"): the logo may NOT be
-    # recoloured, so it cannot sit on the dark anthracite bar the dashboards
-    # use -- its wordmark is anthracite itself and would vanish. The header is
-    # therefore white, letterhead-style, with the original file untouched.
-    # Minimum size 25 mm in print, minimum 8 mm clear space to other elements.
-    _LOGO_W = 34.0          # mm, above the 25 mm minimum
-    _LOGO_CLEARANCE = 8.0   # mm, to the title beside it
-    _HEADER_H = 26.0
+    # Brand & CI v2.1, "Logo-Grundregeln": Mindestgroesse 25 mm Print, Freiraum
+    # mindestens 8 mm zu anderen Elementen, keine Farbaenderungen.
+    _LOGO_W = 34.0
+    _LOGO_CLEARANCE = 8.0
+    _BAR_H = 24.0
 
     def header(self) -> None:
-        logo = _ASSETS / "SWIPAY-Logo.svg"
+        # Dunkler Balken ueber die volle Breite (CI der Produktions-Dashboards).
+        self.set_fill_color(*_ANTHRAZIT)
+        self.rect(0, 0, 210, self._BAR_H, style="F")
+
+        logo = _negative_logo()
         title_x = self.l_margin
-        if logo.exists():
-            self.image(str(logo), x=self.l_margin, y=7, w=self._LOGO_W)
+        if logo is not None:
+            # Vertikal zentriert: Logo-Seitenverhaeltnis 453.54 : 170.08.
+            h = self._LOGO_W * 170.079 / 453.54
+            self.image(str(logo), x=self.l_margin,
+                       y=(self._BAR_H - h) / 2, w=self._LOGO_W)
             title_x = self.l_margin + self._LOGO_W + self._LOGO_CLEARANCE
         else:
-            # Fallback ohne Logo-Datei: Wortmarke als Text.
-            self.set_font("Helvetica", "B", 15)
-            self.set_text_color(*_ANTHRAZIT)
-            self.set_xy(self.l_margin, 9)
-            self.cell(30, 10, "SwiPay", border=0)
-            title_x = self.l_margin + 30 + self._LOGO_CLEARANCE
+            # Kein Negativ-Logo hinterlegt: Wortmarke als weisse Type. Das ist
+            # kein umgefaerbtes Logo, sondern Satz -- CI-konform.
+            self.set_font(self.fam_xb, "", 15)
+            self.set_text_color(*_WHITE)
+            self.set_xy(self.l_margin, 6.5)
+            self.cell(32, 10, "SwiPay", border=0)
+            title_x = self.l_margin + 32 + self._LOGO_CLEARANCE
 
-        self.set_font("Helvetica", "B", 12)
-        self.set_text_color(*_ANTHRAZIT)
-        self.set_xy(title_x, 11)
-        self.cell(100, 7, "SwiPay Payment Benchmarking", border=0)
+        self.set_font(self.fam, "", 11)
+        self.set_text_color(215, 219, 219)
+        self.set_xy(title_x, 8)
+        self.cell(95, 8, "Payment Benchmarking", border=0)
 
-        self.set_font("Helvetica", "", 7.5)
-        self.set_text_color(*_DIM)
-        self.set_xy(130, 12.5)
-        self.cell(68, 5, self.generated_date, border=0, align="R")
+        self.set_font(self.fam, "", 7.5)
+        self.set_text_color(160, 168, 168)
+        self.set_xy(130, 9.5)
+        self.cell(68, 6, self.generated_date, border=0, align="R")
 
-        # Roter Akzent-Strich als Markenzeichen statt eines Farbbalkens.
-        self.set_draw_color(*_ROT)
-        self.set_line_width(0.6)
-        self.line(self.l_margin, self._HEADER_H - 1,
-                  self.l_margin + 186, self._HEADER_H - 1)
-        self.set_y(self._HEADER_H + 4)
+        self.set_y(self._BAR_H + 6)
 
     def footer(self) -> None:
         self.set_y(-14)
         self.set_draw_color(*_LINE)
         self.set_line_width(0.25)
         self.line(12, self.get_y(), 198, self.get_y())
-        self.set_font("Helvetica", "", 7)
+        self.set_font(self.fam, "", 7)
         self.set_text_color(*_FAINT)
         self.cell(0, 8,
-                  "SwiPay AG  ·  Vertraulich - nur für autorisierte Empfänger"
+                  "SwiPay AG  ·  Vertraulich – nur für autorisierte Empfänger"
                   "  ·  Alle Angaben ohne Gewähr",
                   border=0, align="C")
         self.set_xy(12, self.get_y() - 8)
-        self.set_font("Helvetica", "", 7)
+        self.set_font(self.fam, "", 7)
         self.cell(0, 8, f"Seite {self.page_no()}", border=0, align="R")
 
 
@@ -144,7 +197,7 @@ class _SwiPayPDF(FPDF):
 
 def _section_header(pdf: _SwiPayPDF, title: str) -> None:
     """Brand-red section title with rule below."""
-    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_font(pdf.fam, "B", 8.5)
     pdf.set_text_color(*_ROT)
     pdf.cell(0, 5, title.upper(), border=0)
     y = pdf.get_y() + 5
@@ -159,10 +212,10 @@ def _section_header(pdf: _SwiPayPDF, title: str) -> None:
 
 def _kv(pdf: _SwiPayPDF, label: str, value: str, bold_val: bool = False) -> None:
     """Key - Value row, label left dimmed, value right."""
-    pdf.set_font("Helvetica", "", 9)
+    pdf.set_font(pdf.fam, "", 9)
     pdf.set_text_color(*_DIM)
     pdf.cell(95, 6, _safe(label), border=0)
-    pdf.set_font("Helvetica", "B" if bold_val else "", 9)
+    pdf.set_font(pdf.fam, "B" if bold_val else "", 9)
     pdf.set_text_color(*_ANTHRAZIT)
     pdf.cell(91, 6, _safe(value), border=0, align="R")
     pdf.ln()
@@ -178,10 +231,10 @@ def _divider(pdf: _SwiPayPDF) -> None:
 
 def _big_kpi(pdf: _SwiPayPDF, label: str, value: str, rgb: tuple) -> None:
     """Highlighted key metric row."""
-    pdf.set_font("Helvetica", "", 9)
+    pdf.set_font(pdf.fam, "", 9)
     pdf.set_text_color(*_DIM)
     pdf.cell(95, 8, label, border=0)
-    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_font(pdf.fam_xb, "", 14)
     pdf.set_text_color(*rgb)
     pdf.cell(91, 8, value, border=0, align="R")
     pdf.ln(8)
@@ -191,7 +244,7 @@ def _flag(pdf: _SwiPayPDF, text: str, rgb: tuple = _DIM) -> None:
     """Bulleted flag / hint line. Resets x explicitly: after a multi_cell the
     cursor sits at the right edge, which pushed the next flag off the page."""
     pdf.set_x(pdf.l_margin)
-    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_font(pdf.fam, "", 8.5)
     pdf.set_text_color(*_DIM)
     pdf.cell(5, 6, "-", border=0)
     pdf.set_text_color(*rgb)
@@ -208,7 +261,7 @@ def _bar_pair(pdf: _SwiPayPDF, x: float, y: float, w: float, h: float,
     """Worldline gegen SwiPay als zwei Balken -- das PDF-Gegenstueck zu
     ui.chart_compare(). Nulllinie immer bei 0, damit kein abgeschnittener
     Achsenausschnitt den Unterschied groesser aussehen laesst."""
-    pdf.set_font("Helvetica", "B", 7.5)
+    pdf.set_font(pdf.fam, "B", 7.5)
     pdf.set_text_color(*_DIM)
     pdf.set_xy(x, y)
     pdf.cell(w, 4, _safe(title.upper()), border=0)
@@ -230,12 +283,12 @@ def _bar_pair(pdf: _SwiPayPDF, x: float, y: float, w: float, h: float,
         pdf.set_fill_color(*rgb)
         pdf.rect(bx, by, bar_w, max(bh, 0.4), style="F")
         # Betrag ueber (bzw. unter) dem Balken.
-        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_font(pdf.fam, "B", 7.5)
         pdf.set_text_color(*_ANTHRAZIT)
         pdf.set_xy(bx - 6, (by - 4.4) if val >= 0 else (by + bh + 0.4))
         pdf.cell(bar_w + 12, 4, _chf(val, 0), border=0, align="C")
         # Anbieter darunter.
-        pdf.set_font("Helvetica", "", 7)
+        pdf.set_font(pdf.fam, "", 7)
         pdf.set_text_color(*_DIM)
         pdf.set_xy(bx - 6, top + plot_h + 1)
         pdf.cell(bar_w + 12, 4, label, border=0, align="C")
@@ -258,7 +311,7 @@ def _hbars(pdf: _SwiPayPDF, x: float, y: float, w: float,
     track = w - label_w - val_w
     span = max((abs(v) for _, v in rows), default=1.0) or 1.0
     for label, val in rows:
-        pdf.set_font("Helvetica", "", 8)
+        pdf.set_font(pdf.fam, "", 8)
         pdf.set_text_color(*_ANTHRAZIT)
         pdf.set_xy(x, y)
         pdf.cell(label_w, row_h, _safe(label), border=0)
@@ -266,7 +319,7 @@ def _hbars(pdf: _SwiPayPDF, x: float, y: float, w: float,
         bl = abs(val) / span * track
         pdf.set_fill_color(*(_GREEN_CI if val >= 0 else _ROT))
         pdf.rect(x + label_w, y + 1.5, max(bl, 0.4), row_h - 3, style="F")
-        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_font(pdf.fam, "B", 8)
         pdf.set_text_color(*_ANTHRAZIT)
         pdf.set_xy(x + w - val_w, y)
         pdf.cell(val_w, row_h, f"CHF {_chf(val, 0)}", border=0, align="R")
@@ -293,7 +346,7 @@ def _share_bar(pdf: _SwiPayPDF, x: float, y: float, w: float, share: float,
 
     # Prozentwert in den Balken, wenn er passt -- sonst rechts daneben.
     txt = f"{share * 100:.1f} %"
-    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_font(pdf.fam, "B", 8)
     if w * share > 18:
         pdf.set_text_color(*_WHITE)
         pdf.set_xy(x + 2, y + 1.4)
@@ -304,7 +357,7 @@ def _share_bar(pdf: _SwiPayPDF, x: float, y: float, w: float, share: float,
         pdf.cell(30, h - 3, txt, border=0)
 
     y += h + 1.5
-    pdf.set_font("Helvetica", "", 7)
+    pdf.set_font(pdf.fam, "", 7)
     pdf.set_text_color(*_DIM)
     pdf.set_xy(x, y)
     pdf.cell(w / 2, 4, _safe(used_lbl), border=0)
@@ -334,16 +387,16 @@ def _tiles(pdf: _SwiPayPDF, y: float, tiles: list[tuple], w_total: float = 186.0
         pdf.rect(x, y, w, box_h, style="F")
         pdf.set_fill_color(*rgb)
         pdf.rect(x, y, 1.4, box_h, style="F")
-        pdf.set_font("Helvetica", "B", 6.5)
+        pdf.set_font(pdf.fam, "B", 6.5)
         pdf.set_text_color(*_DIM)
         pdf.set_xy(x + 3.5, y + 2)
         pdf.cell(w - 5, 3.5, _safe(label.upper()), border=0)
-        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_font(pdf.fam_xb, "", 12)
         pdf.set_text_color(*rgb)
         pdf.set_xy(x + 3.5, y + 6.5)
         pdf.cell(w - 5, 7, _safe(value), border=0)
         if foot:
-            pdf.set_font("Helvetica", "", 6.5)
+            pdf.set_font(pdf.fam, "", 6.5)
             pdf.set_text_color(*_DIM)
             pdf.set_xy(x + 3.5, y + 13.4)
             pdf.cell(w - 5, 3.5, _safe(foot), border=0)
@@ -386,6 +439,8 @@ def build_pdf(
 
     pdf = _SwiPayPDF(format="A4")
     pdf.generated_date = today_str
+    # Fonts VOR add_page() registrieren -- header() zeichnet sofort mit.
+    pdf.fam, pdf.fam_xb = _register_fonts(pdf)
     pdf.set_margins(12, 12, 12)
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
@@ -394,7 +449,7 @@ def build_pdf(
     # ── Rahmendaten ───────────────────────────────────────────────────────────
     _section_header(pdf, "Rahmendaten")
     _kv(pdf, "Partner", partner_name)
-    _kv(pdf, "Auswertungszeitraum", f"{period_from} - {period_to}")
+    _kv(pdf, "Auswertungszeitraum", f"{period_from} – {period_to}")
     basis_txt = ("Hochrechnung auf Jahresbasis (p.a.)" if v.is_projected
                  else "Ist-Werte des Auswertungszeitraums")
     _kv(pdf, "Darstellungsbasis", basis_txt, bold_val=True)
@@ -418,17 +473,17 @@ def build_pdf(
         by = pdf.get_y()
         pdf.set_fill_color(*bc)
         pdf.rect(pdf.l_margin, by, 52, 7, style="F")
-        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_font(pdf.fam, "B", 8)
         pdf.set_text_color(*_WHITE)
         pdf.set_xy(pdf.l_margin, by)
         pdf.cell(52, 7, f"{cov.label.value.upper()}  {cov.coverage_pct:.0%}",
                  align="C")
-        pdf.set_font("Helvetica", "", 8.5)
+        pdf.set_font(pdf.fam, "", 8.5)
         pdf.set_text_color(*_DIM)
         pdf.set_xy(pdf.l_margin + 55, by)
         band = ""
         if v.band_low is not None:
-            band = (f"Planungsband CHF {_chf(v.band_low, 0)} - "
+            band = (f"Planungsband CHF {_chf(v.band_low, 0)} – "
                     f"CHF {_chf(v.band_high, 0)}")
         pdf.cell(0, 7, _safe(band))
         pdf.ln(11)
@@ -445,7 +500,7 @@ def build_pdf(
          _GREEN_CI if v.total >= 0 else _ROT),
     ], w_total=W)
     pdf.set_xy(pdf.l_margin, y)
-    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_font(pdf.fam, "", 7.5)
     pdf.set_text_color(*_DIM)
     pdf.cell(0, 4, _safe("Acquiring + DCC = geldwerter Vorteil. Beim Acquiring "
                          "sparst du Gebühren, beim DCC bekommst du mehr "
@@ -461,7 +516,7 @@ def build_pdf(
     _bar_pair(pdf, pdf.l_margin + half + 8, y0, half, 44,
               "DCC-Cashback", v.wl_cb, v.sp_cb, _CYAN)
     pdf.set_xy(pdf.l_margin, y0 + 45)
-    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_font(pdf.fam, "", 7.5)
     pdf.set_text_color(*_DIM)
     acq_txt = (f"{_chf(v.acquiring, 0)} gespart" if v.acquiring >= 0
                else f"{_chf(-v.acquiring, 0)} teurer")
@@ -497,7 +552,7 @@ def build_pdf(
              "aus dem Ist-Mix"),
         ], w_total=W)
     pdf.set_xy(pdf.l_margin, y)
-    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_font(pdf.fam, "", 7.5)
     pdf.set_text_color(*_DIM)
     extra = f"Aktive Terminals: {n_terminals}. " if n_terminals else ""
     pdf.multi_cell(0, 4, _safe(
@@ -517,22 +572,22 @@ def build_pdf(
         pdf.set_line_width(0.2)
         pdf.line(pdf.l_margin, y + 1, pdf.l_margin + W, y + 1)
         pdf.set_xy(pdf.l_margin, y + 2)
-        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_font(pdf.fam, "B", 8)
         pdf.set_text_color(*_ANTHRAZIT)
         pdf.cell(W - 26, 6, "Summe", border=0)
         pdf.cell(26, 6, f"CHF {_chf(sum(x for _, x in savings_by_type), 0)}",
                  border=0, align="R")
         pdf.ln(8)
-        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_font(pdf.fam, "", 7.5)
         pdf.set_text_color(*_DIM)
         pdf.multi_cell(0, 4, _safe(
-            "Nicht offerierbare Brands erscheinen bewusst mit Null-Effekt - "
+            "Nicht offerierbare Brands erscheinen bewusst mit Null-Effekt – "
             "dort ändert SwiPay nichts an deinen Konditionen."))
         pdf.ln(4)
 
     # ── DCC ───────────────────────────────────────────────────────────────────
-    _section_header(pdf, "DCC - Cashback und Ausschöpfung")
-    pdf.set_font("Helvetica", "B", 7.5)
+    _section_header(pdf, "DCC – Cashback und Ausschöpfung")
+    pdf.set_font(pdf.fam, "B", 7.5)
     pdf.set_text_color(*_DIM)
     pdf.cell(0, 4, _safe("AUSSCHÖPFUNG DES DCC-FÄHIGEN FREMDWÄHRUNGSVOLUMENS"))
     pdf.ln(5)
@@ -550,14 +605,14 @@ def build_pdf(
          _ANTHRAZIT),
     ], w_total=W)
     pdf.set_xy(pdf.l_margin, y)
-    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_font(pdf.fam, "", 7.5)
     pdf.set_text_color(*_DIM)
     pdf.multi_cell(0, 4, _safe(
         f"{v.dcc_share * 100:.1f} % des DCC-fähigen Fremdwährungsvolumens "
         f"laufen als DCC: CHF {_chf(v.dcc_vol, 0)} von CHF {_chf(v.fx_vol, 0)} "
         f"({v.note}, {v.suffix}). «Cashback bei 100 %» rechnet den "
         f"SwiPay-Satz von {dcc_pct * 100:.2f} % auf das gesamte DCC-fähige "
-        "Kaufvolumen - eine Obergrenze, keine Prognose: volle Ausschöpfung "
+        "Kaufvolumen – eine Obergrenze, keine Prognose: volle Ausschöpfung "
         "setzt voraus, dass jeder Karteninhaber DCC annimmt."))
     pdf.ln(4)
 
@@ -571,7 +626,7 @@ def build_pdf(
             f"{cov.coverage_pct:.0%} ({cov.label.value})")
         if v.band_low is not None:
             _kv(pdf, "Planungsband (-15 % / +15 %)",
-                f"CHF {_chf(v.band_low, 0)} - CHF {_chf(v.band_high, 0)}")
+                f"CHF {_chf(v.band_low, 0)} – CHF {_chf(v.band_high, 0)}")
         if portfolio_coverage_pct is not None:
             n_note = (f" ({n_entities_used} von {n_entities_total} "
                       "Merchants/Gruppen)" if n_entities_total else "")
@@ -580,12 +635,12 @@ def build_pdf(
                 f"hochgerechnet{n_note}")
         pdf.ln(2)
         if cov.label == CoverageLabel.INDICATIVE:
-            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.set_font(pdf.fam, "B", 8.5)
             pdf.set_text_color(*_ROT)
             pdf.cell(6, 6, "!")
             pdf.cell(0, 6, f"Datenbasis indikativ (Deckung {cov.coverage_pct:.0%})")
             pdf.ln(5)
-            pdf.set_font("Helvetica", "", 8.5)
+            pdf.set_font(pdf.fam, "", 8.5)
             pdf.set_text_color(*_ANTHRAZIT)
             pdf.set_x(pdf.l_margin + 6)
             pdf.multi_cell(0, 5, _safe(
@@ -595,10 +650,10 @@ def build_pdf(
                 "Streuung. Empfehlung: Weitere Monatsdaten einsenden."))
             pdf.ln(3)
         elif cov.label == CoverageLabel.LOW_COVERAGE:
-            pdf.set_font("Helvetica", "I", 8)
+            pdf.set_font(pdf.fam, "I", 8)
             pdf.set_text_color(*_DIM)
             pdf.multi_cell(0, 5, _safe(
-                "Datenbasis eingeschränkt (Deckung 25-60 %): Punktschätzung "
+                "Datenbasis eingeschränkt (Deckung 25–60 %): Punktschätzung "
                 "plausibel, Planungsband beachten."))
             pdf.ln(2)
         pdf.ln(2)
@@ -616,20 +671,20 @@ def build_pdf(
 
         for pid in flags_fanout:
             _flag(pdf,
-                  f"Datenauffälligkeit (Fan-out): Partner-ID {pid} - "
+                  f"Datenauffälligkeit (Fan-out): Partner-ID {pid} – "
                   "Vor Angebotsstellung bitte manuell klären.",
                   rgb=_ROT)
 
         for cluster in flags_dup_vol:
             _flag(pdf,
                   f"Möglicher Fan-out (Hochrechnung): {', '.join(cluster)} haben "
-                  "denselben Jahresumsatz hinterlegt - wird dennoch summiert, "
+                  "denselben Jahresumsatz hinterlegt – wird dennoch summiert, "
                   "bitte prüfen.",
                   rgb=_AMBER)
 
         for brand in flags_zero:
             _flag(pdf,
-                  f"«{brand}»: kein SwiPay-Angebot - Transaktionen spiegeln "
+                  f"«{brand}»: kein SwiPay-Angebot – Transaktionen spiegeln "
                   "Worldline-Konditionen exakt (kein Vergleichseffekt).")
 
         for hint in flags_mix:
@@ -639,7 +694,7 @@ def build_pdf(
 
     # ── Disclaimer ────────────────────────────────────────────────────────────
     _divider(pdf)
-    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_font(pdf.fam, "I", 7.5)
     pdf.set_text_color(*_FAINT)
     pdf.multi_cell(
         0, 4.5,
