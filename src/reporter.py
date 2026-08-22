@@ -109,23 +109,29 @@ def _register_fonts(pdf: FPDF) -> tuple[str, str]:
 
 # ── PDF base class ────────────────────────────────────────────────────────────
 
-# Negativ-Logo (weisse Wortmarke) fuer den dunklen Header-Balken. Wird in
-# dieser Reihenfolge gesucht; SVG bevorzugt, weil es als Vektor skaliert.
+# Negativ-Logo (weisse Wortmarke) fuer den dunklen Header-Balken.
 # WICHTIG: nie das Positiv-Logo umfaerben -- Brand & CI v2.1, "Logo-
 # Grundregeln": keine Farbaenderungen. Deshalb eine eigene Datei.
-_LOGO_NEG_CANDIDATES = (
-    "SWIPAY-Logo-negativ.svg", "SWIPAY-Logo-negativ.png",
-    "SWIPAY-Logo-negative.svg", "SWIPAY-Logo-negative.png",
-    "SWIPAY-Logo-weiss.svg", "SWIPAY-Logo-weiss.png",
-)
+#
+# Gesucht wird nach MUSTER, nicht nach festen Namen: die Assets kommen aus
+# Illustrator-Exporten mit wechselnder Schreibweise (Binde- vs. Unterstrich,
+# Sprach-Suffix wie "_de"). SVG gewinnt gegen PNG, weil es als Vektor skaliert.
+_NEG_MARKERS = ("negativ", "negative", "weiss", "white", "invers", "inverse")
 
 
 def _negative_logo() -> Path | None:
-    for name in _LOGO_NEG_CANDIDATES:
-        cand = _ASSETS / name
-        if cand.exists():
-            return cand
-    return None
+    if not _ASSETS.exists():
+        return None
+    cands = [
+        f for f in _ASSETS.iterdir()
+        if f.suffix.lower() in (".svg", ".png")
+        and "logo" in f.stem.lower()
+        and any(m in f.stem.lower() for m in _NEG_MARKERS)
+    ]
+    if not cands:
+        return None
+    cands.sort(key=lambda f: (f.suffix.lower() != ".svg", f.name.lower()))
+    return cands[0]
 
 
 class _SwiPayPDF(FPDF):

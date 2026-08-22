@@ -139,3 +139,52 @@ def test_umlauts_and_guillemets_survive_both_font_paths(monkeypatch, tmp_path):
     assert build_pdf(**kw)[:4] == b"%PDF"
     monkeypatch.setattr(reporter, "_FONTS", tmp_path / "keine-fonts")
     assert build_pdf(**kw)[:4] == b"%PDF"
+
+
+# ── Negativ-Logo im dunklen Header ────────────────────────────────────────────
+
+def test_negative_logo_is_present_and_found():
+    """Der dunkle Balken braucht das Negativ-Logo. Das Positiv-Logo darf dort
+    NIE landen: seine Wortmarke ist selbst anthrazit (Brand & CI v2.1 verbietet
+    Umfärben)."""
+    import reporter
+    found = reporter._negative_logo()
+    assert found is not None, "kein Negativ-Logo in assets/ gefunden"
+    assert "logo" in found.stem.lower()
+    assert any(m in found.stem.lower() for m in reporter._NEG_MARKERS)
+    assert found.name != "SWIPAY-Logo.svg"
+
+
+def test_negative_logo_lookup_is_pattern_based(monkeypatch, tmp_path):
+    """Illustrator-Exporte variieren in der Schreibweise (Binde- vs.
+    Unterstrich, Sprach-Suffix). Eine feste Namensliste hat die echte Datei
+    «SWIPAY_Logo_negativ_de.svg» verpasst -- deshalb Muster."""
+    import reporter
+    monkeypatch.setattr(reporter, "_ASSETS", tmp_path)
+    for name in ("SWIPAY_Logo_negativ_de.svg", "SWIPAY-Logo-negative.png",
+                 "swipay_logo_weiss.svg", "SWIPAY-Logo-invers.png"):
+        (tmp_path / name).write_bytes(b"x")
+        assert reporter._negative_logo() is not None, name
+        (tmp_path / name).unlink()
+
+    # Positiv-Logo allein darf NICHT als Negativ durchgehen.
+    (tmp_path / "SWIPAY-Logo.svg").write_bytes(b"x")
+    assert reporter._negative_logo() is None
+
+
+def test_negative_logo_lookup_prefers_svg_over_png(monkeypatch, tmp_path):
+    import reporter
+    monkeypatch.setattr(reporter, "_ASSETS", tmp_path)
+    (tmp_path / "SWIPAY-Logo-negativ.png").write_bytes(b"x")
+    (tmp_path / "SWIPAY-Logo-negativ.svg").write_bytes(b"x")
+    assert reporter._negative_logo().suffix == ".svg"
+
+
+def test_renders_when_no_negative_logo_is_available(monkeypatch, tmp_path):
+    """Ohne Negativ-Logo faellt der Header auf eine weisse Wortmarke als Type
+    zurueck -- Satz, kein umgefaerbtes Logo."""
+    import reporter
+    monkeypatch.setattr(reporter, "_ASSETS", tmp_path)
+    monkeypatch.setattr(reporter, "_FONTS", tmp_path / "fonts")
+    v = build_view(_agg(), _T, _D, BASIS_IST)
+    assert build_pdf(view=v, **_META)[:4] == b"%PDF"

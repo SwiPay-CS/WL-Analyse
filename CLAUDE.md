@@ -117,10 +117,17 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   (Hero + Acquiring/DCC/Total) · zwei Vergleiche · Kennzahlen; Seite 2
   Kartentyp · DCC · Grundlage der Hochrechnung · Datenhinweise. Zwei feste
   Seitenumbrüche, kein Auto-Break mitten in einer Sektion.
-- PDF-Kopf: dunkler Anthrazit-Balken, darauf das NEGATIV-Logo. Gesucht wird
-  assets/SWIPAY-Logo-negativ.svg|.png (weitere Namen siehe
-  _LOGO_NEG_CANDIDATES in reporter.py), SVG bevorzugt. Fehlt die Datei, greift
-  eine weisse Wortmarke als Type — das ist Satz, kein umgefärbtes Logo.
+- PDF-Kopf: dunkler Anthrazit-Balken, darauf das NEGATIV-Logo
+  (assets/SWIPAY_Logo_negativ_de.svg). Gefunden wird es per MUSTER, nicht per
+  festem Namen: *.svg|.png in assets/, Stem enthält «logo» plus einen Marker
+  aus _NEG_MARKERS (negativ/negative/weiss/white/invers/inverse), SVG vor PNG.
+  Grund: Illustrator-Exporte wechseln zwischen Binde- und Unterstrich und
+  hängen Sprach-Suffixe an — eine feste Namensliste hat die echte Datei
+  verpasst. Fehlt die Datei, greift eine weisse Wortmarke als Type — das ist
+  Satz, kein umgefärbtes Logo.
+  Hinweis: die Fills der Negativ-SVG stecken in style="fill: #fff;"
+  (Inline-CSS), nicht in fill-Attributen. fpdf2 verarbeitet das; ein Grep nach
+  fill=" findet sie NICHT.
   Das Positiv-Logo (assets/SWIPAY-Logo.svg) darf NIE auf den dunklen Balken:
   seine Wortmarke ist selbst anthrazit, und Brand & CI v2.1 verbietet
   Farbänderungen am Logo ausdrücklich («Logo-Grundregeln»: keine
