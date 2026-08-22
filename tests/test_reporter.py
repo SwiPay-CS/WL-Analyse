@@ -1,60 +1,108 @@
-"""Tests for reporter.py's build_pdf: focused on the Hochrechnung-related
-extensions (Portfolio-Abdeckung, Fan-out-Hinweis bei doppelten Jahresumsatz-
-Werten) added alongside aggregation.py -- not a full PDF content assertion,
-just "it renders without crashing and returns bytes"."""
+"""Tests fuer reporter.py's build_pdf.
+
+Kein voller Inhaltsvergleich -- geprueft wird, dass das PDF rendert, dass es
+der gewaehlten ANSICHT folgt (Hochrechnung p.a. gegen Ist-Zeitraum) und dass
+die Vorzeichen-Faelle und Randfaelle nicht abstuerzen.
+"""
+
+import pytest
 
 from projection import CoverageLabel, CoverageTier
 from aggregation import AggregateProjection
 from reporter import build_pdf
+from view import BASIS_IST, BASIS_PA, build_view
 
-_KWARGS = dict(
-    partner_name="Test AG", period_from="2024-01", period_to="2024-12",
-    brutto=10_000.0, n_txn=100, n_terminals=2, avg_ticket=100.0,
-    wl_net=500.0, sp_net=400.0, wl_cashback=10.0, sp_cashback=15.0,
-    saving=100.0, dcc_advantage=5.0, dcc_pct=0.014,
-    generated_date="01.01.2026",
-)
+_T = {"wl_fee": 600.0, "sp_fee": 540.0, "wl_net": 590.0, "sp_net": 520.0,
+      "wl_cashback": 10.0, "sp_cashback": 20.0}
+_D = {"brutto": 100_000.0, "n_txn": 900, "n_term": 4, "avg_ticket": 111.0,
+      "dcc_vol": 8_000.0, "fx_vol": 40_000.0,
+      "dcc_vol_purch": 8_100.0, "fx_vol_purch": 40_400.0}
+
+_META = dict(partner_name="Test AG", period_from="2024-01", period_to="2024-12",
+             n_terminals=4, dcc_pct=0.014, generated_date="01.01.2026")
 
 
-def _agg(label: CoverageLabel) -> AggregateProjection:
+def _agg(label: CoverageLabel = CoverageLabel.LOW_COVERAGE) -> AggregateProjection:
     return AggregateProjection(
-        wl_net_annual=5_000.0, sp_net_annual=4_000.0, saving_annual=1_000.0,
-        dcc_advantage_annual=50.0, n_txn_annual=1_000.0,
-        band_low=850.0, band_high=1_150.0,
-        coverage=CoverageTier(label, 0.4), annual_volume_total=25_000.0,
-        portfolio_coverage_pct=0.6, used=["A", "B"], skipped=["C"],
-        duplicate_groups=[["A", "B"]],
+        wl_net_annual=5_900.0, sp_net_annual=5_200.0, saving_annual=700.0,
+        dcc_advantage_annual=100.0, n_txn_annual=9_000.0,
+        band_low=595.0, band_high=805.0,
+        coverage=CoverageTier(label, 0.4), annual_volume_total=1_000_000.0,
+        portfolio_coverage_pct=0.6,
+        wl_fee_annual=6_000.0, sp_fee_annual=5_400.0,
+        acquiring_advantage_annual=600.0,
+        wl_cashback_annual=100.0, sp_cashback_annual=200.0,
+        brutto_annual=1_000_000.0,
+        dcc_volume_annual=80_000.0, fx_volume_annual=400_000.0,
+        dcc_purchase_volume_annual=81_000.0, fx_purchase_volume_annual=404_000.0,
+        used=["A", "B"], skipped=["C"], duplicate_groups=[["A", "B"]],
+        scales=[10.0, 10.0, 1.0],
     )
 
 
-def test_build_pdf_without_projection_returns_bytes():
-    pdf = build_pdf(**_KWARGS)
-    assert isinstance(pdf, bytes)
+_TYPES = [("Debit", 300.0), ("Credit M/V", 380.0), ("Credit Rest", 20.0)]
+
+
+def test_ist_view_renders_without_a_projection_block():
+    agg = _agg()
+    v = build_view(agg, _T, _D, BASIS_IST)
+    pdf = build_pdf(view=v, savings_by_type=_TYPES, **_META)
     assert pdf[:4] == b"%PDF"
 
 
-def test_build_pdf_with_aggregate_projection_and_portfolio_coverage():
-    agg = _agg(CoverageLabel.LOW_COVERAGE)
-    pdf = build_pdf(
-        **_KWARGS,
-        projection=agg, annual_volume=agg.annual_volume_total,
-        portfolio_coverage_pct=agg.portfolio_coverage_pct,
-        n_entities_used=len(agg.used), n_entities_total=len(agg.used) + len(agg.skipped),
-        duplicate_volume_warnings=agg.duplicate_groups,
-    )
-    assert isinstance(pdf, bytes)
+def test_pa_view_carries_the_projection_block():
+    agg = _agg()
+    v = build_view(agg, _T, _D, BASIS_PA)
+    pdf = build_pdf(view=v, savings_by_type=_TYPES, projection=agg,
+                    portfolio_coverage_pct=agg.portfolio_coverage_pct,
+                    n_entities_used=2, n_entities_total=3,
+                    duplicate_volume_warnings=agg.duplicate_groups, **_META)
     assert pdf[:4] == b"%PDF"
 
 
-def test_build_pdf_with_indicative_coverage_and_no_duplicates():
+@pytest.mark.parametrize("label", list(CoverageLabel))
+def test_every_coverage_label_renders(label):
+    agg = _agg(label)
+    v = build_view(agg, _T, _D, BASIS_PA)
+    pdf = build_pdf(view=v, savings_by_type=_TYPES, projection=agg,
+                    portfolio_coverage_pct=0.6, n_entities_used=2,
+                    n_entities_total=3, **_META)
+    assert pdf[:4] == b"%PDF"
+
+
+def test_negative_advantage_renders():
+    """SwiPay teurer auf beiden Beinen -- die Balken kippen unter die Nulllinie."""
+    t = dict(_T, sp_fee=700.0, sp_net=690.0, sp_cashback=5.0)
+    v = build_view(_agg(), t, _D, BASIS_IST)
+    assert v.total < 0 and v.acquiring < 0 and v.dcc < 0
+    assert build_pdf(view=v, savings_by_type=[("Debit", -50.0)], **_META)[:4] == b"%PDF"
+
+
+def test_renders_without_optional_blocks():
+    """Ohne Kartentyp-Aufschluesselung, ohne Hinweise, ohne Terminals."""
+    v = build_view(_agg(), _T, _D, BASIS_IST)
+    pdf = build_pdf(view=v, partner_name="X", period_from="-", period_to="-",
+                    generated_date="01.01.2026")
+    assert pdf[:4] == b"%PDF"
+
+
+def test_renders_with_zero_turnover():
+    """Kein Umsatz -> keine Gebuehrenrate. Darf nicht durch Null teilen."""
+    d = dict(_D, brutto=0.0, fx_vol=0.0, fx_vol_purch=0.0, dcc_vol=0.0)
+    v = build_view(_agg(), _T, d, BASIS_IST)
+    assert v.wl_rate is None
+    assert build_pdf(view=v, **_META)[:4] == b"%PDF"
+
+
+def test_all_data_hints_render_together():
     agg = _agg(CoverageLabel.INDICATIVE)
-    agg.duplicate_groups = []
-    pdf = build_pdf(
-        **_KWARGS,
-        projection=agg, annual_volume=agg.annual_volume_total,
-        portfolio_coverage_pct=agg.portfolio_coverage_pct,
-        n_entities_used=len(agg.used), n_entities_total=len(agg.used) + len(agg.skipped),
-        duplicate_volume_warnings=agg.duplicate_groups,
-    )
-    assert isinstance(pdf, bytes)
+    v = build_view(agg, _T, _D, BASIS_PA)
+    pdf = build_pdf(view=v, savings_by_type=_TYPES, projection=agg,
+                    portfolio_coverage_pct=0.3, n_entities_used=2,
+                    n_entities_total=5,
+                    duplicate_volume_warnings=[["A", "B"], ["C", "D"]],
+                    fanout_partner_ids=["31035", "31036"],
+                    zero_effect_brands=["TWINT", "WeChat Pay"],
+                    mix_hints=["Visa: share 20 % observed vs 35 % annual"],
+                    **_META)
     assert pdf[:4] == b"%PDF"

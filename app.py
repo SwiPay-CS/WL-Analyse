@@ -25,6 +25,7 @@ from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
 from projection import CoverageLabel, volume_bases
 from aggregation import EntityInput, aggregate
+from view import BASIS_IST, BASIS_PA, RATE_DEC, build_view
 from db_groups import init_groups_db, get_groups, assign_group, unassign_group
 from reporter import build_pdf, build_csv
 from settings import (
@@ -77,11 +78,7 @@ HIST_LABELS = ["0–10", "10–50", "50–100", "100–200", "200–500", "500+"
 
 chf, num, pct, chf_c = ui.chf, ui.num, ui.pct, ui.chf_compact
 
-# Effective fee rates are quoted with three decimals -- see _view() for why two
-# would make the page contradict itself.
-RATE_DEC = 3
-
-
+# RATE_DEC comes from view.py -- the same precision is used in the PDF.
 def pct_rate(frac: float) -> str:
     """A fee rate as a percentage of turnover, e.g. 0.007544 -> "0.754 %"."""
     return f"{frac * 100:.{RATE_DEC}f} %"
@@ -161,83 +158,6 @@ def _derive(fdf: pd.DataFrame, comp: pd.DataFrame, t: dict) -> dict:
         "dcc_vol": vb.dcc_net, "fx_vol": vb.fx_net,
         "dcc_vol_purch": vb.dcc_purchase, "fx_vol_purch": vb.fx_purchase,
     }
-
-
-# ── View-Modell: eine Quelle fuer alle KPIs und Charts ────────────────────────
-# Die Praesentation soll NIE Ist- und Jahreswerte mischen. Statt jede Kachel
-# und jedes Chart einzeln zu entscheiden, baut _view() genau EIN Zahlenpaket
-# -- entweder komplett hochgerechnet oder komplett Ist -- und alles darunter
-# liest nur noch daraus.
-
-_BASIS_PA  = "pa"
-_BASIS_IST = "ist"
-
-
-def _view(agg, t: dict, d: dict, basis: str) -> dict:
-    """Zahlenpaket fuer die Praesentation.
-
-    basis == _BASIS_PA  -> Jahreswerte aus der Hochrechnung (agg)
-    basis == _BASIS_IST -> Ist-Werte des gewaehlten Zeitraums (t/d)
-
-    Die Zerlegung ist in beiden Faellen exakt:
-        total = acquiring + dcc
-    weil wl_net = wl_fee - wl_cashback gilt (siehe engine.py). Kein Residuum,
-    keine Ruecklaufposition.
-    """
-    if basis == _BASIS_PA:
-        v = {
-            "basis": _BASIS_PA,
-            "suffix": "p.a.",
-            "note": "hochgerechnet",
-            "brutto": agg.brutto_annual,
-            "n_txn": agg.n_txn_annual,
-            "wl_fee": agg.wl_fee_annual, "sp_fee": agg.sp_fee_annual,
-            "wl_net": agg.wl_net_annual, "sp_net": agg.sp_net_annual,
-            "wl_cb": agg.wl_cashback_annual, "sp_cb": agg.sp_cashback_annual,
-            "acquiring": agg.acquiring_advantage_annual,
-            "dcc": agg.dcc_advantage_annual,
-            "total": agg.saving_annual,
-            "dcc_vol": agg.dcc_volume_annual,
-            "fx_vol": agg.fx_volume_annual,
-            "dcc_vol_purch": agg.dcc_purchase_volume_annual,
-            "fx_vol_purch": agg.fx_purchase_volume_annual,
-            "band_low": agg.band_low, "band_high": agg.band_high,
-        }
-    else:
-        v = {
-            "basis": _BASIS_IST,
-            "suffix": "im Zeitraum",
-            "note": "Ist-Werte",
-            "brutto": d["brutto"],
-            "n_txn": float(d["n_txn"]),
-            "wl_fee": t["wl_fee"], "sp_fee": t["sp_fee"],
-            "wl_net": t["wl_net"], "sp_net": t["sp_net"],
-            "wl_cb": t["wl_cashback"], "sp_cb": t["sp_cashback"],
-            "acquiring": t["wl_fee"] - t["sp_fee"],
-            "dcc": t["sp_cashback"] - t["wl_cashback"],
-            "total": t["wl_net"] - t["sp_net"],
-            "dcc_vol": d["dcc_vol"],
-            "fx_vol": d["fx_vol"],
-            "dcc_vol_purch": d["dcc_vol_purch"],
-            "fx_vol_purch": d["fx_vol_purch"],
-            "band_low": None, "band_high": None,
-        }
-
-    # Effektive Gebuehrenrate als Anteil vom Bruttoumsatz -- die Kennzahl, mit
-    # der ein Haendler Angebote vergleicht. Nur definiert, wenn es eine
-    # Umsatzbasis gibt (sonst None, nicht 0 -- lieber eine Luecke).
-    #
-    # Anzeige mit DREI Dezimalen (RATE_DEC): bei zwei Dezimalen stehen 0.75 %
-    # und 0.67 % da, und 0.08 / 0.75 ergibt 10.7 % -- was der Kachel
-    # "Gebuehren-Reduktion" (11.3 %) widerspricht. Mit drei Dezimalen geht die
-    # Rechnung fuer den Leser auf: 0.085 / 0.754 = 11.3 %.
-    base = v["brutto"]
-    v["wl_rate"] = (v["wl_net"] / base) if base else None
-    v["sp_rate"] = (v["sp_net"] / base) if base else None
-    v["rate_delta"] = ((v["wl_rate"] - v["sp_rate"])
-                       if v["wl_rate"] is not None else None)
-    v["rel_pct"] = (v["total"] / abs(v["wl_net"]) * 100) if v["wl_net"] else 0.0
-    return v
 
 
 def _order_types(g: pd.DataFrame) -> pd.DataFrame:
@@ -448,19 +368,19 @@ def page_praesentation() -> None:
             basis_lbl = st.radio(
                 "Ansicht", ["Hochrechnung p.a.", "Ist-Zeitraum"], horizontal=True,
                 label_visibility="collapsed", key="praes_basis")
-            basis = _BASIS_PA if basis_lbl.startswith("Hochrechnung") else _BASIS_IST
+            basis = BASIS_PA if basis_lbl.startswith("Hochrechnung") else BASIS_IST
         else:
-            basis = _BASIS_IST
+            basis = BASIS_IST
             st.caption("Keine Hochrechnung hinterlegt — **Einstellungen → "
                        "Merchants → Hochrechnung**.")
 
-    v = _view(agg, t, d, basis)
-    acc_total = ui.GREEN if v["total"] >= 0 else ui.ROT
+    v = build_view(agg, t, d, basis)
+    acc_total = ui.GREEN if v.total >= 0 else ui.ROT
 
     # ── HERO: geldwerter Vorteil ──────────────────────────────────────────────
     hcol, kcol = st.columns([1.15, 1])
     with hcol:
-        if basis == _BASIS_PA:
+        if basis == BASIS_PA:
             cov = agg.coverage
             # Der Hero zeigt IMMER den errechneten Punktwert -- denselben, den
             # die Detailkachel "Geldwerter Vorteil" und die Typ-Aufschlüsselung
@@ -471,11 +391,11 @@ def page_praesentation() -> None:
             cov_txt = {CoverageLabel.SIMULATABLE: "hohe Deckung",
                        CoverageLabel.LOW_COVERAGE: "mittlere Deckung",
                        CoverageLabel.INDICATIVE: "indikativ"}[cov.label]
-            ui.hero("Geldwerter Vorteil pro Jahr", f"CHF {chf(v['total'], 0)}",
-                    band=f"Planungsband CHF {chf(v['band_low'], 0)} – "
-                         f"{chf(v['band_high'], 0)}",
+            ui.hero("Geldwerter Vorteil pro Jahr", f"CHF {chf(v.total, 0)}",
+                    band=f"Planungsband CHF {chf(v.band_low, 0)} – "
+                         f"{chf(v.band_high, 0)}",
                     foot=f"Deckungsgrad {cov.coverage_pct:.0%} · {cov_txt} · "
-                         f"Basis Jahresumsatz CHF {chf(v['brutto'], 0)}",
+                         f"Basis Jahresumsatz CHF {chf(v.brutto, 0)}",
                     accent=acc_total)
             ui.coverage_banner(cov.label, cov.coverage_pct)
             n_total = len(agg.used) + len(agg.skipped)
@@ -488,31 +408,30 @@ def page_praesentation() -> None:
                     f"Möglicher Fan-out: {', '.join(cluster)} haben denselben "
                     "Jahresumsatz hinterlegt — wird dennoch summiert. Bitte prüfen.")
         else:
-            ui.hero("Geldwerter Vorteil im Zeitraum", f"CHF {chf(v['total'], 0)}",
+            ui.hero("Geldwerter Vorteil im Zeitraum", f"CHF {chf(v.total, 0)}",
                     foot=(f"Ist-Werte {frm or '–'} bis {to or '–'} · "
-                          f"Bruttoumsatz CHF {chf(v['brutto'], 0)}"
+                          f"Bruttoumsatz CHF {chf(v.brutto, 0)}"
                           + ("" if has_proj else
                              " · keine Hochrechnung hinterlegt")),
                     accent=acc_total)
     with kcol:
         # Veraenderung, nicht Reduktion: das Vorzeichen zeigt die Richtung der
-        # Gebuehren. Sinken sie, steht ein Minus (gruen); steigen sie, ein Plus
-        # (rot). rel_pct ist die ERSPARNIS, also invertieren. Der Nullfall wird
+        # Gebuehren -- sinken sie, steht ein Minus (gruen). Der Nullfall wird
         # abgefangen, sonst formatiert Python die negative Null als "-0.0 %".
-        chg = -v["rel_pct"]
+        chg = v.fee_change_pct
         chg_txt = "0.0 %" if abs(chg) < 0.05 else f"{chg:+.1f} %"
         ui.kpi_row([
-            {"label": f"Bruttoumsatz {v['suffix']}",
-             "value": f"CHF {chf_c(v['brutto'])}",
-             "foot": v["note"], "accent": ui.BLUE},
+            {"label": f"Bruttoumsatz {v.suffix}",
+             "value": f"CHF {chf_c(v.brutto)}",
+             "foot": v.note, "accent": ui.BLUE},
             {"label": "Gebührenveränderung", "value": chg_txt,
              "foot": "vs. Worldline",
-             "accent": ui.GREEN if v["rel_pct"] >= 0 else ui.ROT},
+             "accent": ui.GREEN if v.rel_pct >= 0 else ui.ROT},
         ])
         # Effektive Gebührenrate in % vom Umsatz -- vergleichbar mit jedem
         # anderen Angebot, unabhängig von der Umsatzgrösse.
-        if v["wl_rate"] is not None:
-            dlt = v["rate_delta"]
+        if v.wl_rate is not None:
+            dlt = v.rate_delta
             # Richtung ausschreiben: ein nacktes "+0.085" liest sich, als wäre
             # SwiPay teurer, obwohl es die Ersparnis ist.
             # %-Punkte, nicht %: die Ratendifferenz und die relative
@@ -520,18 +439,18 @@ def page_praesentation() -> None:
             # tragen, sonst liest man 0.085 als 8.5 % Ersparnis.
             rate_foot = (
                 "gleiche Rate" if abs(dlt) < 5e-6 else
-                f"{pp(dlt)} günstiger ({-v['rel_pct']:.1f} %)" if dlt > 0 else
-                f"{pp(-dlt)} teurer (+{abs(v['rel_pct']):.1f} %)")
+                f"{pp(dlt)} günstiger ({-v.rel_pct:.1f} %)" if dlt > 0 else
+                f"{pp(-dlt)} teurer (+{abs(v.rel_pct):.1f} %)")
             ui.kpi_row([
-                {"label": "Gebühren Total WL", "value": pct_rate(v["wl_rate"]),
+                {"label": "Gebühren Total WL", "value": pct_rate(v.wl_rate),
                  "foot": "vom Bruttoumsatz", "accent": ui.ANTHRAZIT},
                 {"label": "Gebühren Total SwiPay",
-                 "value": pct_rate(v["sp_rate"]), "foot": rate_foot,
+                 "value": pct_rate(v.sp_rate), "foot": rate_foot,
                  "accent": ui.GREEN if dlt >= 0 else ui.ROT},
             ])
         ui.kpi_row([
-            {"label": f"Transaktionen {v['suffix']}", "value": num(v["n_txn"]),
-             "foot": v["note"], "accent": ui.CYAN},
+            {"label": f"Transaktionen {v.suffix}", "value": num(v.n_txn),
+             "foot": v.note, "accent": ui.CYAN},
             {"label": "Ø Ticket", "value": f"CHF {chf(d['avg_ticket'])}",
              "foot": "aus dem Ist-Mix", "accent": ui.CYAN},
         ])
@@ -541,22 +460,22 @@ def page_praesentation() -> None:
     # SPART der Händler Gebühren, beim DCC BEKOMMT er mehr Cashback. Erst die
     # Summe ist der geldwerte Vorteil.
     ui.section("Woher der Vorteil kommt",
-               f"Acquiring + DCC = geldwerter Vorteil · {v['note']} "
-               f"({v['suffix']})")
-    acq, dccv, tot = v["acquiring"], v["dcc"], v["total"]
+               f"Acquiring + DCC = geldwerter Vorteil · {v.note} "
+               f"({v.suffix})")
+    acq, dccv, tot = v.acquiring, v.dcc, v.total
     share = (lambda x: f"{x / tot:.0%} des Vorteils") if tot else (lambda x: "")
     ui.kpi_row([
-        {"label": f"Acquiring-Ersparnis {v['suffix']}",
+        {"label": f"Acquiring-Ersparnis {v.suffix}",
          "value": f"CHF {chf(acq, 0)}",
          "foot": ("gesparte Gebühren · " + share(acq)) if acq >= 0
                  else "höhere Gebühren als Worldline",
          "accent": ui.GREEN if acq >= 0 else ui.ROT},
-        {"label": f"DCC-Mehrertrag {v['suffix']}",
+        {"label": f"DCC-Mehrertrag {v.suffix}",
          "value": f"CHF {chf(dccv, 0)}",
          "foot": ("höherer Cashback · " + share(dccv)) if dccv >= 0
                  else "geringerer Cashback als Worldline",
          "accent": ui.CYAN if dccv >= 0 else ui.ROT},
-        {"label": f"Geldwerter Vorteil {v['suffix']}",
+        {"label": f"Geldwerter Vorteil {v.suffix}",
          "value": f"CHF {chf(tot, 0)}",
          "foot": ("Acquiring + DCC" if tot >= 0
                   else "SwiPay wäre teurer — kein Vorteil"),
@@ -568,22 +487,22 @@ def page_praesentation() -> None:
     a, b = st.columns(2)
     with a:
         st.altair_chart(
-            ui.chart_compare(v["wl_fee"], v["sp_fee"],
+            ui.chart_compare(v.wl_fee, v.sp_fee,
                              "Acquiring-Gebühren CHF", ui.ROT),
             use_container_width=True)
         st.caption(
-            f"Gebühren vor DCC-Cashback: Worldline CHF {chf(v['wl_fee'], 0)} "
-            f"gegen SwiPay CHF {chf(v['sp_fee'], 0)} — "
+            f"Gebühren vor DCC-Cashback: Worldline CHF {chf(v.wl_fee, 0)} "
+            f"gegen SwiPay CHF {chf(v.sp_fee, 0)} — "
             + (f"**CHF {chf(acq, 0)} gespart**." if acq >= 0
                else f"**CHF {chf(-acq, 0)} teurer**."))
     with b:
         st.altair_chart(
-            ui.chart_compare(v["wl_cb"], v["sp_cb"], "DCC-Cashback CHF",
+            ui.chart_compare(v.wl_cb, v.sp_cb, "DCC-Cashback CHF",
                              ui.CYAN),
             use_container_width=True)
         st.caption(
-            f"Cashback aus DCC: Worldline CHF {chf(v['wl_cb'], 0)} gegen "
-            f"SwiPay CHF {chf(v['sp_cb'], 0)} — "
+            f"Cashback aus DCC: Worldline CHF {chf(v.wl_cb, 0)} gegen "
+            f"SwiPay CHF {chf(v.sp_cb, 0)} — "
             + (f"**CHF {chf(dccv, 0)} mehr**." if dccv >= 0
                else f"**CHF {chf(-dccv, 0)} weniger**."))
 
@@ -591,11 +510,11 @@ def page_praesentation() -> None:
     # Kein zweites WL-gegen-SwiPay-Balkenpaar mehr: der Wasserfall oben zeigt
     # dieselben zwei Aussenwerte bereits. Hier nur die Aufschlüsselung.
     ui.section("Ersparnis nach Kartentyp",
-               f"Wo der Vorteil entsteht · {v['note']} ({v['suffix']})")
+               f"Wo der Vorteil entsteht · {v.note} ({v.suffix})")
     # Bei p.a. je Entity mit IHREM Faktor skaliert, damit die Summe exakt dem
     # Wert im Hero entspricht.
     sbt = _order_types(_savings_by_type_scaled(entities, agg.scales)
-                       if basis == _BASIS_PA else _savings_by_type(fdf, comp))
+                       if basis == BASIS_PA else _savings_by_type(fdf, comp))
     if not sbt.empty:
         a, b = st.columns([1.6, 1])
         with a:
@@ -623,31 +542,31 @@ def page_praesentation() -> None:
         st.caption("Keine offerierbaren Brands mit Effekt in dieser Auswahl.")
 
     # ── DCC ───────────────────────────────────────────────────────────────────
-    ui.section("DCC", f"Cashback heute und Ausschöpfungs-Potenzial · {v['suffix']}")
+    ui.section("DCC", f"Cashback heute und Ausschöpfungs-Potenzial · {v.suffix}")
     # Ausschoepfungsquote auf der NETTO-Basis: so sind die Davos-Anker gelockt
     # (fx 4'336'735.23, dcc 905'721.92) und so stehen die Volumen in der
     # Caption.
-    dcc_share = (v["dcc_vol"] / v["fx_vol"]) if v["fx_vol"] else 0.0
+    dcc_share = v.dcc_share
     # Obergrenze dagegen auf der KAUF-Basis: Cashback wird nur auf Kaeufe
     # gezahlt (siehe projection.VolumeBases). Auf der Netto-Basis ergaebe
     # sp_cashback / dcc_volumen 1.8518 % statt der eingestellten 1.85 % --
     # Zaehler und Nenner sassen auf verschiedenen Basen.
-    cb_max = profile.dcc_pct * v["fx_vol_purch"]
-    cb_head = cb_max - v["sp_cb"]
+    cb_max = v.cashback_ceiling(profile.dcc_pct)
+    cb_head = cb_max - v.sp_cb
     a, b = st.columns([1, 1.35])
     with a:
-        st.altair_chart(ui.chart_dcc_share(v["dcc_vol"], v["fx_vol"]),
+        st.altair_chart(ui.chart_dcc_share(v.dcc_vol, v.fx_vol),
                         use_container_width=True)
         st.caption(f"{dcc_share:.1%} des DCC-fähigen Fremdwährungsvolumens "
-                   f"laufen als DCC: CHF {chf(v['dcc_vol'], 0)} von "
-                   f"CHF {chf(v['fx_vol'], 0)} ({v['note']}, {v['suffix']}).")
+                   f"laufen als DCC: CHF {chf(v.dcc_vol, 0)} von "
+                   f"CHF {chf(v.fx_vol, 0)} ({v.note}, {v.suffix}).")
     with b:
         # JEDE Kachel traegt den Basis-Zusatz. Trug nur die erste ihn, lasen
         # sich die anderen wie Ist-Werte, obwohl sie hochgerechnet sind.
-        sfx = v["suffix"]
+        sfx = v.suffix
         ui.kpi_row([
             {"label": f"Cashback SwiPay {sfx}",
-             "value": f"CHF {chf(v['sp_cb'], 0)}",
+             "value": f"CHF {chf(v.sp_cb, 0)}",
              "foot": f"{profile.dcc_pct*100:.2f} % auf {dcc_share:.1%} "
                      "Ausschöpfung", "accent": ui.CYAN},
             {"label": f"Cashback bei 100 % {sfx}",
@@ -660,7 +579,7 @@ def page_praesentation() -> None:
              "foot": f"+{1 - dcc_share:.1%} Volumen bis zur Obergrenze",
              "accent": ui.ORANGE},
             {"label": f"DCC-Kaufvolumen {sfx}",
-             "value": f"CHF {chf_c(v['fx_vol_purch'])}",
+             "value": f"CHF {chf_c(v.fx_vol_purch)}",
              "foot": "DCC-fähig, Basis der Obergrenze",
              "accent": ui.ANTHRAZIT},
         ])
@@ -701,14 +620,16 @@ def page_praesentation() -> None:
     with a:
         if st.button("Kunden-PDF generieren", type="primary"):
             try:
+                # Das PDF bekommt DASSELBE Zahlenpaket wie der Bildschirm und
+                # folgt damit der gewählten Ansicht (p.a. oder Ist).
                 pdf_bytes = build_pdf(
-                    partner_name=partner_disp, period_from=frm or "–", period_to=to or "–",
-                    brutto=d["brutto"], n_txn=d["n_txn"], n_terminals=d["n_term"],
-                    avg_ticket=d["avg_ticket"], wl_net=t["wl_net"], sp_net=t["sp_net"],
-                    wl_cashback=t["wl_cashback"], sp_cashback=t["sp_cashback"],
-                    saving=d["diff"], dcc_advantage=d["dcc_adv"], dcc_pct=profile.dcc_pct,
+                    view=v,
+                    partner_name=partner_disp,
+                    period_from=frm or "–", period_to=to or "–",
+                    n_terminals=d["n_term"], dcc_pct=profile.dcc_pct,
+                    savings_by_type=[(r.Typ, float(r.Ersparnis))
+                                     for r in sbt.itertuples()],
                     projection=agg if (agg and agg.has_projection) else None,
-                    annual_volume=agg.annual_volume_total if agg else 0.0,
                     portfolio_coverage_pct=(agg.portfolio_coverage_pct
                                             if agg and agg.has_projection else None),
                     n_entities_used=len(agg.used) if agg else 0,

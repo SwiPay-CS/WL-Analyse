@@ -102,13 +102,27 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
       Zähler und Nenner sässen auf verschiedenen Basen.
   Die Ausschöpfung wird mit EINER Dezimale angezeigt (Donut-Labels und
   Caption synchron).
-- Präsentation-Ansicht: _view() in app.py baut EIN Zahlenpaket pro Rendering,
-  entweder komplett hochgerechnet oder komplett Ist. Jede Kachel und jedes
-  Chart liest nur daraus — nie Ist und p.a. mischen. Umschalter «Hochrechnung
-  p.a. / Ist-Zeitraum», p.a. ist Default sobald eine Hochrechnung existiert,
+- Präsentation-Ansicht: view.build_view() (src/view.py, Streamlit-frei) baut
+  EIN Zahlenpaket pro Rendering (ViewNumbers), entweder komplett hochgerechnet
+  oder komplett Ist. Jede Kachel, jedes Chart UND das Kunden-PDF lesen nur
+  daraus — nie Ist und p.a. mischen. Umschalter «Hochrechnung p.a. /
+  Ist-Zeitraum», p.a. ist Default sobald eine Hochrechnung existiert,
   Umschalter fehlt wenn keine da ist. «Zeit & Verteilung» bleibt bewusst immer
   Ist (ein Monatsverlauf lässt sich nicht hochrechnen, ohne Saisonalität zu
   erfinden) und sagt das im Untertitel.
+- Kunden-PDF (reporter.build_pdf) bekommt DASSELBE ViewNumbers-Objekt wie der
+  Bildschirm und FOLGT damit der gewählten Ansicht; `projection` liefert nur
+  noch Deckungsgrad, Planungsband und Entity-Listen, alle Beträge kommen aus
+  der View. Aufbau spiegelt die Präsentation: Seite 1 Rahmendaten · Vorteil
+  (Hero + Acquiring/DCC/Total) · zwei Vergleiche · Kennzahlen; Seite 2
+  Kartentyp · DCC · Grundlage der Hochrechnung · Datenhinweise. Zwei feste
+  Seitenumbrüche, kein Auto-Break mitten in einer Sektion.
+- PDF-Grafiken sind native fpdf2-Vektoren (kein gerendertes Altair-PNG, keine
+  Zusatz-Abhängigkeit). ACHTUNG: fpdf2s solid_arc() taugt NICHT für einen
+  Donut — es platziert den Mittelpunkt nicht wie dokumentiert und zeichnet
+  Winkel nicht proportional zur Spanne (50 % rendert als Viertelkeil). Die
+  DCC-Ausschöpfung ist im PDF deshalb ein gestapelter Balken (_share_bar),
+  auf dem Bildschirm bleibt der Donut (Altair rechnet korrekt).
 - Aufschlüsselungen (z. B. nach Kartentyp) werden je Entity mit IHREM eigenen
   Faktor skaliert (aggregation.AggregateProjection.scales), nie mit einem
   gemischten Durchschnittsfaktor — sonst deckt sich die Summe nicht mit dem

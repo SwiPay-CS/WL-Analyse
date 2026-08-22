@@ -17,7 +17,8 @@ from datetime import date
 import pandas as pd
 from fpdf import FPDF
 
-from projection import CoverageLabel, ProjectionResult
+from projection import CoverageLabel
+from view import RATE_DEC, ViewNumbers
 
 
 # ── CI palette ────────────────────────────────────────────────────────────────
@@ -28,6 +29,7 @@ _CYAN       = ( 60, 143, 153)   # #3c8f99
 _GREEN_CI   = (148, 159,  80)   # #949f50
 _AMBER      = (200, 150,  50)
 _BG         = (244, 242, 239)   # #f4f2ef
+_BLUE       = ( 34,  79,  89)   # #224f59
 _LINE       = (227, 221, 214)   # #e3ddd6
 _WHITE      = (255, 255, 255)
 _DIM        = (138, 148, 149)   # ≈ rgba(62,75,76,.62)
@@ -42,6 +44,21 @@ _BADGE_COLORS = {
 
 def _chf(v: float, dec: int = 2) -> str:
     return f"{v:,.{dec}f}".replace(",", "'")
+
+
+def _num(v: float) -> str:
+    return f"{int(round(v)):,}".replace(",", "'")
+
+
+def _pct_rate(frac: float) -> str:
+    """Gebuehrenrate als Prozent vom Umsatz. RATE_DEC kommt aus view.py, damit
+    Bildschirm und PDF dieselbe Praezision zeigen."""
+    return f"{frac * 100:.{RATE_DEC}f} %"
+
+
+def _pp(frac: float) -> str:
+    """Differenz zweier Raten in Prozentpunkten -- nie in %."""
+    return f"{frac * 100:.{RATE_DEC}f} %-Punkte"
 
 
 def _safe(text: str) -> str:
@@ -154,7 +171,9 @@ def _big_kpi(pdf: _SwiPayPDF, label: str, value: str, rgb: tuple) -> None:
 
 
 def _flag(pdf: _SwiPayPDF, text: str, rgb: tuple = _DIM) -> None:
-    """Bulleted flag / hint line."""
+    """Bulleted flag / hint line. Resets x explicitly: after a multi_cell the
+    cursor sits at the right edge, which pushed the next flag off the page."""
+    pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "", 8.5)
     pdf.set_text_color(*_DIM)
     pdf.cell(5, 6, "-", border=0)
@@ -162,26 +181,170 @@ def _flag(pdf: _SwiPayPDF, text: str, rgb: tuple = _DIM) -> None:
     pdf.multi_cell(181, 5.5, _safe(text), border=0)
 
 
+# ── Vektor-Charts (dieselben Bilder wie auf dem Bildschirm) ───────────────────
+# Bewusst native fpdf2-Primitive statt gerenderter Altair-PNGs: keine
+# Zusatz-Abhaengigkeit, scharfe Vektoren im Druck, und die CI-Farben kommen aus
+# derselben Palette wie der Rest des Berichts.
+
+def _bar_pair(pdf: _SwiPayPDF, x: float, y: float, w: float, h: float,
+              title: str, wl: float, sp: float, sp_rgb: tuple) -> None:
+    """Worldline gegen SwiPay als zwei Balken -- das PDF-Gegenstueck zu
+    ui.chart_compare(). Nulllinie immer bei 0, damit kein abgeschnittener
+    Achsenausschnitt den Unterschied groesser aussehen laesst."""
+    pdf.set_font("Helvetica", "B", 7.5)
+    pdf.set_text_color(*_DIM)
+    pdf.set_xy(x, y)
+    pdf.cell(w, 4, _safe(title.upper()), border=0)
+
+    top = y + 6.5
+    plot_h = h - 12          # Platz fuer Titel oben, Beschriftung unten
+    lo = min(0.0, wl, sp)
+    hi = max(0.0, wl, sp)
+    span = (hi - lo) or 1.0
+    zero_y = top + plot_h * (hi / span)
+
+    bar_w = 15.0
+    gap = (w - 2 * bar_w) / 3.0
+    for i, (label, val, rgb) in enumerate(
+            [("Worldline", wl, _ANTHRAZIT), ("SwiPay", sp, sp_rgb)]):
+        bx = x + gap * (i + 1) + bar_w * i
+        bh = abs(val) / span * plot_h
+        by = zero_y - bh if val >= 0 else zero_y
+        pdf.set_fill_color(*rgb)
+        pdf.rect(bx, by, bar_w, max(bh, 0.4), style="F")
+        # Betrag ueber (bzw. unter) dem Balken.
+        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_text_color(*_ANTHRAZIT)
+        pdf.set_xy(bx - 6, (by - 4.4) if val >= 0 else (by + bh + 0.4))
+        pdf.cell(bar_w + 12, 4, _chf(val, 0), border=0, align="C")
+        # Anbieter darunter.
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*_DIM)
+        pdf.set_xy(bx - 6, top + plot_h + 1)
+        pdf.cell(bar_w + 12, 4, label, border=0, align="C")
+
+    # Nulllinie nur zeichnen, wenn sie im Bild liegt (negative Werte).
+    if lo < 0:
+        pdf.set_draw_color(*_LINE)
+        pdf.set_line_width(0.2)
+        pdf.line(x, zero_y, x + w, zero_y)
+
+
+def _hbars(pdf: _SwiPayPDF, x: float, y: float, w: float,
+           rows: list[tuple[str, float]], row_h: float = 6.2) -> float:
+    """Waagrechte Balken in der VORGEGEBENEN Reihenfolge (nicht nach Betrag) --
+    das PDF-Gegenstueck zu ui.chart_savings_by_type(). Gibt die neue y-Position
+    zurueck."""
+    if not rows:
+        return y
+    label_w, val_w = 30.0, 26.0
+    track = w - label_w - val_w
+    span = max((abs(v) for _, v in rows), default=1.0) or 1.0
+    for label, val in rows:
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*_ANTHRAZIT)
+        pdf.set_xy(x, y)
+        pdf.cell(label_w, row_h, _safe(label), border=0)
+        # Balkenlaenge proportional zum groessten Betrag der Gruppe.
+        bl = abs(val) / span * track
+        pdf.set_fill_color(*(_GREEN_CI if val >= 0 else _ROT))
+        pdf.rect(x + label_w, y + 1.5, max(bl, 0.4), row_h - 3, style="F")
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*_ANTHRAZIT)
+        pdf.set_xy(x + w - val_w, y)
+        pdf.cell(val_w, row_h, f"CHF {_chf(val, 0)}", border=0, align="R")
+        y += row_h
+    return y
+
+
+def _share_bar(pdf: _SwiPayPDF, x: float, y: float, w: float, share: float,
+               used_lbl: str, rest_lbl: str, h: float = 9.0) -> float:
+    """Ausschoepfung als gestapelter Balken: genutzter Anteil cyan, Rest grau.
+
+    Bewusst KEIN Donut wie auf dem Bildschirm: fpdf2s solid_arc() zeichnet
+    weder den Mittelpunkt an der dokumentierten Stelle noch Winkel proportional
+    zur Spanne (50 % rendert als Viertelkeil). Ein falsch proportionierter
+    Kuchen im Kundenbericht waere schlimmer als keiner -- zwei Rechtecke sind
+    exakt. Gibt die neue y-Position zurueck.
+    """
+    share = min(max(share, 0.0), 1.0)
+    pdf.set_fill_color(217, 210, 201)
+    pdf.rect(x, y, w, h, style="F")
+    if share > 0.0005:
+        pdf.set_fill_color(*_CYAN)
+        pdf.rect(x, y, w * share, h, style="F")
+
+    # Prozentwert in den Balken, wenn er passt -- sonst rechts daneben.
+    txt = f"{share * 100:.1f} %"
+    pdf.set_font("Helvetica", "B", 8)
+    if w * share > 18:
+        pdf.set_text_color(*_WHITE)
+        pdf.set_xy(x + 2, y + 1.4)
+        pdf.cell(w * share - 4, h - 3, txt, border=0)
+    else:
+        pdf.set_text_color(*_ANTHRAZIT)
+        pdf.set_xy(x + w * share + 2, y + 1.4)
+        pdf.cell(30, h - 3, txt, border=0)
+
+    y += h + 1.5
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(*_DIM)
+    pdf.set_xy(x, y)
+    pdf.cell(w / 2, 4, _safe(used_lbl), border=0)
+    pdf.set_xy(x + w / 2, y)
+    pdf.cell(w / 2, 4, _safe(rest_lbl), border=0, align="R")
+    return y + 5
+
+
+def _tiles(pdf: _SwiPayPDF, y: float, tiles: list[tuple], w_total: float = 186.0,
+           h: float = 17.0, x0: float | None = None) -> float:
+    """Kachelzeile: Label klein oben, Wert gross darunter, Akzentbalken links.
+    Spiegelt ui.kpi_row(). Jede Kachel ist (label, value, rgb) oder
+    (label, value, rgb, foot) -- die Fussnote traegt Zusaetze wie eine
+    Ratendifferenz, die im Label abgeschnitten wuerden. x0 setzt den linken
+    Rand. Gibt die neue y-Position zurueck."""
+    n = len(tiles)
+    gap = 3.0
+    w = (w_total - gap * (n - 1)) / n
+    left = pdf.l_margin if x0 is None else x0
+    has_foot = any(len(t) > 3 and t[3] for t in tiles)
+    box_h = h + (3.5 if has_foot else 0.0)
+    for i, t in enumerate(tiles):
+        label, value, rgb = t[0], t[1], t[2]
+        foot = t[3] if len(t) > 3 else ""
+        x = left + i * (w + gap)
+        pdf.set_fill_color(250, 249, 247)
+        pdf.rect(x, y, w, box_h, style="F")
+        pdf.set_fill_color(*rgb)
+        pdf.rect(x, y, 1.4, box_h, style="F")
+        pdf.set_font("Helvetica", "B", 6.5)
+        pdf.set_text_color(*_DIM)
+        pdf.set_xy(x + 3.5, y + 2)
+        pdf.cell(w - 5, 3.5, _safe(label.upper()), border=0)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(*rgb)
+        pdf.set_xy(x + 3.5, y + 6.5)
+        pdf.cell(w - 5, 7, _safe(value), border=0)
+        if foot:
+            pdf.set_font("Helvetica", "", 6.5)
+            pdf.set_text_color(*_DIM)
+            pdf.set_xy(x + 3.5, y + 13.4)
+            pdf.cell(w - 5, 3.5, _safe(foot), border=0)
+    return y + box_h + 3
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def build_pdf(
     *,
+    view: ViewNumbers,
     partner_name: str,
     period_from: str,
     period_to: str,
-    brutto: float,
-    n_txn: int,
-    n_terminals: int,
-    avg_ticket: float,
-    wl_net: float,
-    sp_net: float,
-    wl_cashback: float,
-    sp_cashback: float,
-    saving: float,
-    dcc_advantage: float,
-    dcc_pct: float,
-    projection: ProjectionResult | None = None,
-    annual_volume: float = 0.0,
+    n_terminals: int = 0,
+    dcc_pct: float = 0.0,
+    savings_by_type: list[tuple[str, float]] | None = None,
+    projection=None,                  # AggregateProjection | ProjectionResult
     portfolio_coverage_pct: float | None = None,
     n_entities_used: int = 0,
     n_entities_total: int = 0,
@@ -191,84 +354,214 @@ def build_pdf(
     mix_hints: list[str] | None = None,
     generated_date: str | None = None,
 ) -> bytes:
-    """Render the customer PDF and return raw bytes."""
+    """Kunden-PDF als Bytes.
+
+    `view` ist dasselbe Zahlenpaket, das der Bildschirm rendert (view.py). Das
+    PDF FOLGT damit der gewaehlten Ansicht -- Hochrechnung p.a. oder
+    Ist-Zeitraum -- und kann nicht von der Praesentation abweichen.
+
+    `projection` liefert nur noch Deckungsgrad, Planungsband und die
+    Entity-Listen; alle Betraege kommen aus `view`.
+    """
     today_str = generated_date or date.today().strftime("%d.%m.%Y")
+    v = view
+    proj_mode = v.is_projected and projection is not None
 
     pdf = _SwiPayPDF(format="A4")
     pdf.generated_date = today_str
     pdf.set_margins(12, 12, 12)
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
+    W = 186.0  # nutzbare Breite
 
     # ── Rahmendaten ───────────────────────────────────────────────────────────
     _section_header(pdf, "Rahmendaten")
     _kv(pdf, "Partner", partner_name)
     _kv(pdf, "Auswertungszeitraum", f"{period_from} - {period_to}")
+    basis_txt = ("Hochrechnung auf Jahresbasis (p.a.)" if v.is_projected
+                 else "Ist-Werte des Auswertungszeitraums")
+    _kv(pdf, "Darstellungsbasis", basis_txt, bold_val=True)
     _kv(pdf, "Erstellt am", today_str)
-    pdf.ln(5)
+    pdf.ln(4)
 
-    # ── Zusammenfassung ───────────────────────────────────────────────────────
-    _section_header(pdf, "Zusammenfassung")
-    _kv(pdf, "Bruttoumsatz (Käufe)", f"CHF {_chf(brutto)}")
-    _kv(pdf, "Transaktionen gesamt", f"{n_txn:,}".replace(",", "'"))
-    _kv(pdf, "Aktive Terminals", str(n_terminals))
-    _kv(pdf, "Ø Transaktionswert", f"CHF {_chf(avg_ticket)}")
-    pdf.ln(3)
+    # ── Der Vorteil ───────────────────────────────────────────────────────────
+    _section_header(pdf, "Ihr geldwerter Vorteil")
 
-    _kv(pdf, "Worldline-Gebühren (netto)", f"CHF {_chf(wl_net)}")
-    _kv(pdf, "SwiPay-Gebühren (netto)", f"CHF {_chf(sp_net)}")
-    _divider(pdf)
+    # Hero: immer der errechnete Punktwert, wie auf dem Bildschirm. Die
+    # Vorsicht steckt sichtbar im Planungsband und im Deckungs-Badge, nicht in
+    # einer stillen Ersetzung der Headline.
+    hero_lbl = ("Geldwerter Vorteil pro Jahr" if v.is_projected
+                else "Geldwerter Vorteil im Zeitraum")
+    _big_kpi(pdf, hero_lbl, f"CHF {_chf(v.total, 0)}",
+             _GREEN_CI if v.total >= 0 else _ROT)
 
-    saving_color = _GREEN_CI if saving >= 0 else _ROT
-    _big_kpi(pdf, "Ersparnis gegenüber Worldline", f"CHF {_chf(saving)}", saving_color)
-
-    if wl_net != 0:
-        pct = saving / abs(wl_net) * 100
-        _kv(pdf, "Relative Gebührenreduktion", f"{pct:.1f} %")
-    pdf.ln(2)
-
-    _kv(pdf, f"DCC-Cashback Worldline", f"CHF {_chf(wl_cashback)}")
-    _kv(pdf, f"DCC-Cashback SwiPay ({dcc_pct * 100:.2f} %)", f"CHF {_chf(sp_cashback)}")
-    dcc_color = _CYAN if dcc_advantage >= 0 else _ROT
-    _big_kpi(pdf, "DCC-Vorteil SwiPay", f"CHF {_chf(dcc_advantage)}", dcc_color)
-
-    # ── Hochrechnung ──────────────────────────────────────────────────────────
-    if projection is not None and annual_volume > 0:
-        _section_header(pdf, "Hochrechnung auf Jahresbasis")
-        proj = projection
-        cov  = proj.coverage
-
-        # Coverage badge (filled rect)
+    if proj_mode:
+        cov = projection.coverage
         bc = _BADGE_COLORS.get(cov.label, _DIM)
+        by = pdf.get_y()
         pdf.set_fill_color(*bc)
+        pdf.rect(pdf.l_margin, by, 52, 7, style="F")
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_text_color(*_WHITE)
-        bx, by = pdf.get_x(), pdf.get_y()
-        pdf.rect(pdf.l_margin, by, 52, 7, style="F")
         pdf.set_xy(pdf.l_margin, by)
-        pdf.cell(52, 7, f"{cov.label.value.upper()}  {cov.coverage_pct:.0%}", align="C")
+        pdf.cell(52, 7, f"{cov.label.value.upper()}  {cov.coverage_pct:.0%}",
+                 align="C")
         pdf.set_font("Helvetica", "", 8.5)
         pdf.set_text_color(*_DIM)
         pdf.set_xy(pdf.l_margin + 55, by)
-        pdf.cell(0, 7, f"Jahresumsatz-Ziel: CHF {_chf(annual_volume)}")
-        pdf.ln(10)
+        band = ""
+        if v.band_low is not None:
+            band = (f"Planungsband CHF {_chf(v.band_low, 0)} - "
+                    f"CHF {_chf(v.band_high, 0)}")
+        pdf.cell(0, 7, _safe(band))
+        pdf.ln(11)
         pdf.set_text_color(*_ANTHRAZIT)
 
-        headline = (proj.band_low if cov.label == CoverageLabel.INDICATIVE
-                    else proj.saving_annual)
-        if cov.label == CoverageLabel.INDICATIVE:
-            _kv(pdf, "Headline (konservatives Ende)", f"CHF {_chf(headline)}", bold_val=True)
-        _kv(pdf, "Punktschätzung Ersparnis p.a.", f"CHF {_chf(proj.saving_annual)}")
-        _kv(pdf, "Planungsband (-15 % / +15 %)",
-            f"CHF {_chf(proj.band_low)} - CHF {_chf(proj.band_high)}")
-        _kv(pdf, "DCC-Vorteil p.a.", f"CHF {_chf(proj.dcc_advantage_annual)}", bold_val=True)
+    # Zerlegung: beim Acquiring SPART der Haendler, beim DCC BEKOMMT er mehr.
+    # Die Summe ist exakt der Hero-Wert (Identitaet, siehe engine.py).
+    y = _tiles(pdf, pdf.get_y(), [
+        (f"Acquiring-Ersparnis {v.suffix}", f"CHF {_chf(v.acquiring, 0)}",
+         _GREEN_CI if v.acquiring >= 0 else _ROT),
+        (f"DCC-Mehrertrag {v.suffix}", f"CHF {_chf(v.dcc, 0)}",
+         _CYAN if v.dcc >= 0 else _ROT),
+        (f"Geldwerter Vorteil {v.suffix}", f"CHF {_chf(v.total, 0)}",
+         _GREEN_CI if v.total >= 0 else _ROT),
+    ], w_total=W)
+    pdf.set_xy(pdf.l_margin, y)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(*_DIM)
+    pdf.cell(0, 4, _safe("Acquiring + DCC = geldwerter Vorteil. Beim Acquiring "
+                         "sparen Sie Gebühren, beim DCC erhalten Sie mehr "
+                         "Cashback."))
+    pdf.ln(7)
+
+    # ── Woher der Vorteil kommt: zwei Vergleiche ───────────────────────────────
+    _section_header(pdf, "Woher der Vorteil kommt")
+    y0 = pdf.get_y()
+    half = (W - 8) / 2
+    _bar_pair(pdf, pdf.l_margin, y0, half, 44,
+              "Acquiring-Gebühren (vor Cashback)", v.wl_fee, v.sp_fee, _ROT)
+    _bar_pair(pdf, pdf.l_margin + half + 8, y0, half, 44,
+              "DCC-Cashback", v.wl_cb, v.sp_cb, _CYAN)
+    pdf.set_xy(pdf.l_margin, y0 + 45)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(*_DIM)
+    acq_txt = (f"{_chf(v.acquiring, 0)} gespart" if v.acquiring >= 0
+               else f"{_chf(-v.acquiring, 0)} teurer")
+    dcc_txt = (f"{_chf(v.dcc, 0)} mehr Cashback" if v.dcc >= 0
+               else f"{_chf(-v.dcc, 0)} weniger Cashback")
+    pdf.cell(half, 4, _safe(f"CHF {acq_txt}"), border=0)
+    pdf.set_x(pdf.l_margin + half + 8)
+    pdf.cell(half, 4, _safe(f"CHF {dcc_txt}"), border=0)
+    pdf.ln(8)
+
+    # ── Kennzahlen ────────────────────────────────────────────────────────────
+    _section_header(pdf, "Kennzahlen")
+    chg = v.fee_change_pct
+    chg_txt = "0.0 %" if abs(chg) < 0.05 else f"{chg:+.1f} %"
+    y = _tiles(pdf, pdf.get_y(), [
+        (f"Bruttoumsatz {v.suffix}", f"CHF {_chf(v.brutto, 0)}", _BLUE),
+        ("Gebührenveränderung", chg_txt,
+         _GREEN_CI if v.rel_pct >= 0 else _ROT),
+        (f"Transaktionen {v.suffix}", _num(v.n_txn), _CYAN),
+    ], w_total=W)
+    if v.wl_rate is not None:
+        # Ratendifferenz in %-PUNKTEN, nie in %: daneben steht die relative
+        # Veraenderung in Prozent.
+        dlt = v.rate_delta
+        foot = ("gleiche Rate" if abs(dlt) < 5e-6 else
+                f"{_pp(dlt)} günstiger" if dlt > 0 else f"{_pp(-dlt)} teurer")
+        y = _tiles(pdf, y, [
+            ("Gebühren Total Worldline", _pct_rate(v.wl_rate), _ANTHRAZIT,
+             "vom Bruttoumsatz"),
+            ("Gebühren Total SwiPay", _pct_rate(v.sp_rate),
+             _GREEN_CI if dlt >= 0 else _ROT, foot),
+            ("Ø Transaktionswert", f"CHF {_chf(v.avg_ticket)}", _CYAN,
+             "aus dem Ist-Mix"),
+        ], w_total=W)
+    pdf.set_xy(pdf.l_margin, y)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(*_DIM)
+    extra = f"Aktive Terminals: {n_terminals}. " if n_terminals else ""
+    pdf.multi_cell(0, 4, _safe(
+        f"{extra}Gebührenraten als Anteil vom Bruttoumsatz, netto nach "
+        f"DCC-Cashback. Eine Ratendifferenz ist in Prozentpunkten angegeben."))
+    pdf.ln(3)
+
+    # ── Seite 2: Aufschluesselung, DCC, Grundlagen ────────────────────────────
+    # Fester Umbruch statt Auto-Break: sonst reisst der Umbruch eine Sektion
+    # mitten auseinander (die Caption landete allein auf einer leeren Seite).
+    pdf.add_page()
+
+    if savings_by_type:
+        _section_header(pdf, "Ersparnis nach Kartentyp")
+        y = _hbars(pdf, pdf.l_margin, pdf.get_y(), W, savings_by_type)
+        pdf.set_draw_color(*_LINE)
+        pdf.set_line_width(0.2)
+        pdf.line(pdf.l_margin, y + 1, pdf.l_margin + W, y + 1)
+        pdf.set_xy(pdf.l_margin, y + 2)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*_ANTHRAZIT)
+        pdf.cell(W - 26, 6, "Summe", border=0)
+        pdf.cell(26, 6, f"CHF {_chf(sum(x for _, x in savings_by_type), 0)}",
+                 border=0, align="R")
+        pdf.ln(8)
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(*_DIM)
+        pdf.multi_cell(0, 4, _safe(
+            "Nicht offerierbare Brands erscheinen bewusst mit Null-Effekt - "
+            "dort ändert SwiPay nichts an Ihren Konditionen."))
+        pdf.ln(4)
+
+    # ── DCC ───────────────────────────────────────────────────────────────────
+    _section_header(pdf, "DCC - Cashback und Ausschöpfung")
+    pdf.set_font("Helvetica", "B", 7.5)
+    pdf.set_text_color(*_DIM)
+    pdf.cell(0, 4, _safe("AUSSCHÖPFUNG DES DCC-FÄHIGEN FREMDWÄHRUNGSVOLUMENS"))
+    pdf.ln(5)
+    y = _share_bar(
+        pdf, pdf.l_margin, pdf.get_y(), W, v.dcc_share,
+        f"Als DCC genutzt: CHF {_chf(v.dcc_vol, 0)}",
+        f"Nicht genutzt: CHF {_chf(v.fx_vol - v.dcc_vol, 0)}")
+
+    cb_max = v.cashback_ceiling(dcc_pct)
+    y = _tiles(pdf, y + 2, [
+        (f"Cashback SwiPay {v.suffix}", f"CHF {_chf(v.sp_cb, 0)}", _CYAN),
+        (f"Cashback bei 100 % {v.suffix}", f"CHF {_chf(cb_max, 0)}", _BLUE),
+        (f"Unrealisiert {v.suffix}", f"CHF {_chf(cb_max - v.sp_cb, 0)}", _AMBER),
+        (f"DCC-Kaufvolumen {v.suffix}", f"CHF {_chf(v.fx_vol_purch, 0)}",
+         _ANTHRAZIT),
+    ], w_total=W)
+    pdf.set_xy(pdf.l_margin, y)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(*_DIM)
+    pdf.multi_cell(0, 4, _safe(
+        f"{v.dcc_share * 100:.1f} % des DCC-fähigen Fremdwährungsvolumens "
+        f"laufen als DCC: CHF {_chf(v.dcc_vol, 0)} von CHF {_chf(v.fx_vol, 0)} "
+        f"({v.note}, {v.suffix}). «Cashback bei 100 %» rechnet den "
+        f"SwiPay-Satz von {dcc_pct * 100:.2f} % auf das gesamte DCC-fähige "
+        "Kaufvolumen - eine Obergrenze, keine Prognose: volle Ausschöpfung "
+        "setzt voraus, dass jeder Karteninhaber DCC annimmt."))
+    pdf.ln(4)
+
+    # ── Hochrechnungs-Details ─────────────────────────────────────────────────
+    if proj_mode:
+        _section_header(pdf, "Grundlage der Hochrechnung")
+        cov = projection.coverage
+        _kv(pdf, "Hinterlegter Jahresumsatz",
+            f"CHF {_chf(getattr(projection, 'annual_volume_total', 0.0), 0)}")
+        _kv(pdf, "Deckungsgrad der Datenbasis",
+            f"{cov.coverage_pct:.0%} ({cov.label.value})")
+        if v.band_low is not None:
+            _kv(pdf, "Planungsband (-15 % / +15 %)",
+                f"CHF {_chf(v.band_low, 0)} - CHF {_chf(v.band_high, 0)}")
         if portfolio_coverage_pct is not None:
             n_note = (f" ({n_entities_used} von {n_entities_total} "
                       "Merchants/Gruppen)" if n_entities_total else "")
             _kv(pdf, "Portfolio-Abdeckung",
-                f"{portfolio_coverage_pct:.0%} des Ist-Umsatzes hochgerechnet{n_note}")
-        pdf.ln(3)
-
+                f"{portfolio_coverage_pct:.0%} des Ist-Umsatzes "
+                f"hochgerechnet{n_note}")
+        pdf.ln(2)
         if cov.label == CoverageLabel.INDICATIVE:
             pdf.set_font("Helvetica", "B", 8.5)
             pdf.set_text_color(*_ROT)
@@ -278,75 +571,54 @@ def build_pdf(
             pdf.set_font("Helvetica", "", 8.5)
             pdf.set_text_color(*_ANTHRAZIT)
             pdf.set_x(pdf.l_margin + 6)
-            pdf.multi_cell(
-                0, 5,
-                "Für eine belastbare Hochrechnung werden mindestens 25 % des Jahresumsatzes "
-                "als Datengrundlage empfohlen. Das konservative Ende des Planungsbands "
-                f"(CHF {_chf(proj.band_low)}) dient als Headline. "
-                "Empfehlung: Weitere Monatsdaten einsenden.",
-                border=0,
-            )
-            pdf.ln(4)
+            pdf.multi_cell(0, 5, _safe(
+                "Für eine belastbare Hochrechnung werden mindestens 25 % des "
+                "Jahresumsatzes als Datengrundlage empfohlen. Der ausgewiesene "
+                "Vorteil ist die Punktschätzung; das Planungsband zeigt die "
+                "Streuung. Empfehlung: Weitere Monatsdaten einsenden."))
+            pdf.ln(3)
         elif cov.label == CoverageLabel.LOW_COVERAGE:
             pdf.set_font("Helvetica", "I", 8)
             pdf.set_text_color(*_DIM)
-            pdf.set_x(pdf.l_margin)
-            pdf.multi_cell(
-                0, 5,
-                "Datenbasis eingeschränkt (Deckung 25-60 %): "
-                "Punktschätzung plausibel, Planungsband beachten.",
-                border=0,
-            )
+            pdf.multi_cell(0, 5, _safe(
+                "Datenbasis eingeschränkt (Deckung 25-60 %): Punktschätzung "
+                "plausibel, Planungsband beachten."))
             pdf.ln(2)
-        pdf.ln(3)
+        pdf.ln(2)
 
     # ── Kurzbericht / Datenhinweise ───────────────────────────────────────────
-    flags_fanout   = fanout_partner_ids or []
-    flags_dup_vol  = duplicate_volume_warnings or []
-    flags_zero     = zero_effect_brands or []
-    flags_mix      = mix_hints or []
-    cov_lbl        = projection.coverage.label if projection else None
+    flags_fanout  = fanout_partner_ids or []
+    flags_dup_vol = duplicate_volume_warnings or []
+    flags_zero    = zero_effect_brands or []
+    flags_mix     = mix_hints or []
+    cov_lbl = projection.coverage.label if projection else None
 
-    has_flags = bool(flags_fanout or flags_dup_vol or flags_zero or flags_mix
-                     or cov_lbl in (CoverageLabel.LOW_COVERAGE, CoverageLabel.INDICATIVE))
-
+    has_flags = bool(flags_fanout or flags_dup_vol or flags_zero or flags_mix)
     if has_flags:
         _section_header(pdf, "Datenhinweise und Besonderheiten")
 
-        if cov_lbl == CoverageLabel.INDICATIVE and projection:
-            pct = projection.coverage.coverage_pct
-            _flag(pdf,
-                  f"Deckungsgrad {pct:.0%} – Ergebnisse indikativ. "
-                  "Weitere Monatsdaten werden für eine vollständige Simulation benötigt.",
-                  rgb=_ROT)
-        elif cov_lbl == CoverageLabel.LOW_COVERAGE and projection:
-            pct = projection.coverage.coverage_pct
-            _flag(pdf,
-                  f"Deckungsgrad {pct:.0%} – Datenbasis eingeschränkt (25–60 %).",
-                  rgb=_AMBER)
-
         for pid in flags_fanout:
             _flag(pdf,
-                  f"Datenauffälligkeit (Fan-out): Partner-ID {pid} – "
+                  f"Datenauffälligkeit (Fan-out): Partner-ID {pid} - "
                   "Vor Angebotsstellung bitte manuell klären.",
                   rgb=_ROT)
 
         for cluster in flags_dup_vol:
             _flag(pdf,
                   f"Möglicher Fan-out (Hochrechnung): {', '.join(cluster)} haben "
-                  "denselben Jahresumsatz hinterlegt – wird dennoch summiert, "
+                  "denselben Jahresumsatz hinterlegt - wird dennoch summiert, "
                   "bitte prüfen.",
                   rgb=_AMBER)
 
         for brand in flags_zero:
             _flag(pdf,
-                  f"«{brand}»: kein SwiPay-Angebot – Transaktionen spiegeln "
+                  f"«{brand}»: kein SwiPay-Angebot - Transaktionen spiegeln "
                   "Worldline-Konditionen exakt (kein Vergleichseffekt).")
 
         for hint in flags_mix:
             _flag(pdf, hint)
 
-        pdf.ln(4)
+        pdf.ln(3)
 
     # ── Disclaimer ────────────────────────────────────────────────────────────
     _divider(pdf)
@@ -354,9 +626,10 @@ def build_pdf(
     pdf.set_text_color(*_FAINT)
     pdf.multi_cell(
         0, 4.5,
-        "Alle Angaben ohne Gewähr. Dieser Vergleich basiert auf den eingereichten "
-        "Worldline-Exportdaten und dem gültigen SwiPay IC++-Angebot. "
-        "Massgeblich für eine Zusammenarbeit ist ausschliesslich der unterzeichnete Vertrag.",
+        _safe("Alle Angaben ohne Gewähr. Dieser Vergleich basiert auf den "
+              "eingereichten Worldline-Exportdaten und dem gültigen SwiPay "
+              "IC++-Angebot. Massgeblich für eine Zusammenarbeit ist "
+              "ausschliesslich der unterzeichnete Vertrag."),
         border=0,
     )
 
