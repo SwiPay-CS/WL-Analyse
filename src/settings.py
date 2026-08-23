@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from engine import BrandParams, ParamTable, Offer
@@ -262,6 +263,99 @@ def list_profiles(profiles_dir: str | Path = PROFILES_DIR) -> list[str]:
     if not d.exists():
         return []
     return sorted(p.stem for p in d.glob("*.json"))
+
+
+# ---------------------------------------------------------------------------
+# Templates (Vorlagen)
+# ---------------------------------------------------------------------------
+# A Vorlage is a reusable price sheet with NO customer reference: the SwiPay
+# standard list, an association rate, a framework contract. It lives in
+# config/profiles/ and is git-versioned on purpose -- unlike a Fall
+# (data/cases/, gitignored, customer-specific; see case_store.py).
+#
+# Stored as the RateProfile JSON plus three metadata fields. Extra keys are
+# ignored by load_rate_profile(), so an older profile file still loads.
+
+TEMPLATE_ARTEN = ("standard", "verband", "rahmenvertrag")
+TEMPLATE_ART_LABEL = {
+    "standard": "Standardkonditionen",
+    "verband": "Verbandskonditionen",
+    "rahmenvertrag": "Rahmenvertrag",
+}
+
+
+@dataclass(frozen=True)
+class TemplateMeta:
+    name: str
+    art: str
+    notiz: str
+    updated_at: str
+
+    @property
+    def art_label(self) -> str:
+        return TEMPLATE_ART_LABEL.get(self.art, self.art)
+
+
+def save_template(
+    profile: RateProfile,
+    name: str,
+    art: str = "standard",
+    notiz: str = "",
+    profiles_dir: str | Path = PROFILES_DIR,
+) -> Path:
+    """Write a reusable price sheet. Overwrites a template of the same name."""
+    if art not in TEMPLATE_ARTEN:
+        raise ValueError(f"Unbekannte Vorlagen-Art: {art!r}; erlaubt: {TEMPLATE_ARTEN}")
+    if not str(name).strip():
+        raise ValueError("Eine Vorlage braucht einen Namen.")
+    d = Path(profiles_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    data = profile.to_json()
+    data["art"] = art
+    data["notiz"] = str(notiz)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    p = d / f"{name}.json"
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return p
+
+
+def load_template(
+    name: str, profiles_dir: str | Path = PROFILES_DIR
+) -> tuple[RateProfile, TemplateMeta]:
+    d = Path(profiles_dir)
+    data = json.loads((d / f"{name}.json").read_text(encoding="utf-8"))
+    meta = TemplateMeta(
+        name=name,
+        art=data.get("art", "standard"),
+        notiz=data.get("notiz", ""),
+        updated_at=data.get("updated_at", ""),
+    )
+    return load_rate_profile(name, profiles_dir=d), meta
+
+
+def list_templates(profiles_dir: str | Path = PROFILES_DIR) -> list[TemplateMeta]:
+    """All templates, grouped by Art then name (the order the UI lists them)."""
+    d = Path(profiles_dir)
+    if not d.exists():
+        return []
+    out: list[TemplateMeta] = []
+    for p in sorted(d.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        out.append(TemplateMeta(
+            name=p.stem,
+            art=data.get("art", "standard"),
+            notiz=data.get("notiz", ""),
+            updated_at=data.get("updated_at", ""),
+        ))
+    order = {a: i for i, a in enumerate(TEMPLATE_ARTEN)}
+    return sorted(out, key=lambda m: (order.get(m.art, 99), m.name.lower()))
+
+
+def delete_template(name: str, profiles_dir: str | Path = PROFILES_DIR) -> None:
+    (Path(profiles_dir) / f"{name}.json").unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

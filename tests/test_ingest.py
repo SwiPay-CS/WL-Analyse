@@ -94,3 +94,33 @@ def test_fanout_partner_flagged(db, tmp_path):
     _, report = ingest_files([csv], db)
     assert "P1" in report.fanout_partner_ids
     assert "P2" not in report.fanout_partner_ids
+
+
+def test_a_resaved_export_returns_its_rows_instead_of_an_empty_frame(db, tmp_path):
+    """New file bytes, identical rows: Excel rewrites metadata on save, so the
+    content hash changes while every row stays the same. The level-3 backstop
+    correctly drops all rows as known -- but handing back an empty frame reads
+    as "no data loaded" and empties the screen. Return the rows for display,
+    like the hash-blocked path, and do not register the file."""
+    import sqlite3
+
+    csv = str(tmp_path / "export.csv")
+    _write_csv(csv, [_row(i) for i in range(5)])
+    df1, r1 = ingest_files([csv], db)
+    assert r1.rows_new == 5
+
+    # Same rows, different bytes.
+    resaved = tmp_path / "export_resaved.csv"
+    resaved.write_text(Path(csv).read_text(encoding="utf-8-sig") + "\n",
+                       encoding="utf-8-sig")
+    df2, r2 = ingest_files([str(resaved)], db)
+
+    assert r2.rows_new == 0
+    assert r2.files_blocked_hash == []              # different bytes, not blocked
+    assert r2.files_known_rows == ["export_resaved.csv"]
+    assert r2.files_processed == []                 # never registered
+    assert len(df2) == len(df1) == 5                # rows returned for display
+
+    with sqlite3.connect(db) as con:
+        # No processed_files row claiming an ingest that did not happen.
+        assert con.execute("SELECT COUNT(*) FROM processed_files").fetchone()[0] == 1

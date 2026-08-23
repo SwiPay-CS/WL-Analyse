@@ -32,6 +32,9 @@ class IngestReport:
     files_processed: list[str] = field(default_factory=list)
     files_blocked_hash: list[str] = field(default_factory=list)   # level-2 hard block
     files_warned_name: list[str] = field(default_factory=list)    # level-1 soft warn
+    # New file bytes, but every row already registered (export re-saved). The
+    # rows are returned for display, the file is not registered.
+    files_known_rows: list[str] = field(default_factory=list)
     rows_new: int = 0
     rows_skipped_overlap: int = 0   # intra-batch dedup + level-3 inter-run backstop
     fanout_partner_ids: list[str] = field(default_factory=list)
@@ -229,19 +232,35 @@ def ingest_files(
 
             report.rows_new = len(merged)
 
-            # Persist: attribute each surviving row to the first file that owns it.
-            remaining: set[str] = set(merged["idempotency_key"].tolist())
-            for df_part, fhash, fname in accepted:
-                mine = list(remaining & set(df_part["idempotency_key"].tolist()))
-                remaining -= set(mine)
-                _persist_keys(con, mine, fhash, cid)
-                con.execute(
-                    "INSERT OR IGNORE INTO processed_files "
-                    "(file_name, file_hash, rows_added, correlation_id, processed_at) "
-                    "VALUES (?,?,?,?,?)",
-                    (fname, fhash, len(mine), cid, _utc()),
-                )
-                report.files_processed.append(fname)
+            if merged.empty:
+                # Every row is already registered although the file itself is
+                # new -- the same export re-saved (Excel rewrites metadata, so
+                # the content hash changes while every row stays identical).
+                # Return the loaded rows for display, exactly like the
+                # hash-blocked path above, instead of handing back an empty
+                # frame that reads as "no data loaded". The file is NOT
+                # registered: a processed_files row with rows_added=0 would
+                # claim an ingest that did not happen.
+                merged = pd.concat([d for d, _, _ in accepted], ignore_index=True)
+                merged = merged.drop_duplicates(subset=["idempotency_key"])
+                report.files_known_rows = [f for _, _, f in accepted]
+                _audit(con, cid, "ALL_ROWS_ALREADY_KNOWN",
+                       f"files={report.files_known_rows} rows={len(merged)}")
+            else:
+                # Persist: attribute each surviving row to the first file that
+                # owns it.
+                remaining: set[str] = set(merged["idempotency_key"].tolist())
+                for df_part, fhash, fname in accepted:
+                    mine = list(remaining & set(df_part["idempotency_key"].tolist()))
+                    remaining -= set(mine)
+                    _persist_keys(con, mine, fhash, cid)
+                    con.execute(
+                        "INSERT OR IGNORE INTO processed_files "
+                        "(file_name, file_hash, rows_added, correlation_id, "
+                        "processed_at) VALUES (?,?,?,?,?)",
+                        (fname, fhash, len(mine), cid, _utc()),
+                    )
+                    report.files_processed.append(fname)
         else:
             # All files were hash-blocked; rows_new stays 0.
             # Return the reload_only data (already in DB) for display.

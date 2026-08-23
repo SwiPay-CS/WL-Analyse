@@ -46,7 +46,17 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - Gruppierung nach Partner-ID (Name nur Label).
 - Mehrdatei-Ingest sicher, kein blindes pd.concat. Dedup dreistufig: Dateiname
   (weich) → Inhalts-Hash (hart) → Zeilen-Schlüssel (Backstop). Duplikate
-  verwerfen, nie still, mit Abgleichsbericht. Der ingest-seitige Fan-out-Flag
+  verwerfen, nie still, mit Abgleichsbericht.
+  - Ist eine Datei NEU (anderer Inhalts-Hash), aber jede Zeile schon
+    registriert, gibt ingest_files die geladenen Zeilen zur ANZEIGE zurück
+    statt eines leeren DataFrames, und registriert die Datei NICHT
+    (`files_known_rows` im Report). Tritt real auf, sobald ein Export in Excel
+    neu gespeichert wurde: neue Bytes, identische Zeilen. Vorher leerte das den
+    Bildschirm und schrieb eine processed_files-Zeile mit rows_added=0, die
+    einen Ingest behauptete, der nicht stattfand. Ein Test sichert das ab.
+  - Der Datei-Fingerprint eines Falls folgt den ZEILEN (row_keys → file_hash),
+    nicht den Datei-Bytes. Ein neu gespeicherter Export gilt deshalb weiter als
+    passend. Der ingest-seitige Fan-out-Flag
   (`fanout_partner_ids` in ingest.py, mehrere Vertragsnummern mit identischem
   Jahresumsatz IM EXPORT) ist ein separates Konzept von der Hochrechnung
   weiter unten — bleibt unverändert (Datenauffälligkeit, manuell zu klären).
@@ -236,6 +246,55 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   bei höherer Ausschöpfung ebenfalls mehr Cashback zahlt — das «unrealisierte
   Cashback» ist also NICHT der Zusatzvorteil eines Wechsels. Im Kundentermin
   mündlich einordnen; nicht unkommentiert als Vorteil verkaufen.
+- Fälle und Vorlagen (Stand 2026-08-23): ZWEI getrennte Ebenen, nie vermischt.
+  * Vorlage = wiederverwendbares Preisblatt OHNE Kundenbezug
+    (config/profiles/<name>.json, git-versioniert). Art = standard | verband |
+    rahmenvertrag, plus Notiz und updated_at. Anwenden/Sichern/Löschen im Tab
+    «ASF & DCC». Hier gehört die echte SwiPay-Preisliste hin.
+  * Fall = eine Kundensituation (data/cases/, gitignored). Der KUNDE ist der
+    Ordnungsbegriff, darunter benannte Varianten («konservativ»,
+    «aggressiv»), jede mit sichtbarem Datum der letzten Speicherung.
+    Ablage: kunde.json · export/<datei> EINMAL pro Kunde (nicht pro Variante,
+    sonst 12 MB je Variante) · varianten/<name>.json · berichte/<ts>.pdf
+    (nur auf Knopfdruck, als Nachweis des präsentierten Stands).
+  * KEIN cases-Tisch in swipay.db: die Variantendatei IST das Exportformat
+    (.swipaycase.json). Ein Schema, ein Codepfad, nichts das driften kann.
+  * Payload v1 (case_store.SCHEMA_VERSION) pinnt Konditionen, Brand-Stammliste,
+    Gruppen, Hochrechnungen, Auswahl (Scope/Zeitraum/Basis) und die
+    Datei-Hashes des Exports. NIE Transaktionszeilen — die Datei wird
+    weitergegeben, Karteninhaberdaten reisen nicht in einer Config mit. Eine
+    neuere schema_version wird abgelehnt, nicht geraten.
+  * Import-Regeln (Nutzer-Entscheid): Brand-Master GEWINNT bei Widerspruch
+    (config/brands.json ist geteilt und git-versioniert — ein alter Fall darf
+    sie nicht für alle künftigen Kunden umschreiben); Abweichung wird als Diff
+    gezeigt, nur dem Master unbekannte Brands sind additiv wählbar.
+    Hochrechnungen und Gruppen werden IN swipay.db geschrieben, aber erst nach
+    einer Änderungsliste. Abgeglichen werden NUR die im Payload genannten
+    Gruppen — andere gehören anderen Kunden.
+  * Fehlende Partner-IDs (im Fall hinterlegt, in den Daten nicht vorhanden)
+    werden sichtbar ausgewiesen, nie verschluckt.
+  * Autosave läuft IMMER vor Reset und vor Fallwechsel, und ZUERST: der
+    Schnappschuss muss die ALTEN DB-Werte tragen, sonst ist ein versehentlicher
+    Import unumkehrbar. Reservierter Kunde «_autosave», ohne Export-Kopie (die
+    Originaldatei liegt noch in data/). Kein fortlaufender Autosave.
+  * Löschen der letzten Variante nimmt Export-Kopie und Berichte NICHT mit;
+    dafür gibt es «Kunde ganz entfernen» mit Grössenangabe.
+  * Partner-ID-Vergleich muss ui.pid-Semantik folgen: der Export liefert
+    partner_id als float64 («174723.0»), swipay.db speichert «174723».
+    case_store._norm_pid spiegelt das — ohne diese Normalisierung galt JEDE
+    hinterlegte ID als fehlend (46 Fehlalarme auf dem Davos-Datensatz).
+  * Nach JEDEM programmatischen Setzen von st.session_state.profile müssen die
+    Widget-Keys vergessen werden (_forget_kondition_widgets in app.py:
+    asf_/trx_/mf_/dcc_in, expert_editor). Sonst schreibt der ASF-Tab im
+    nächsten Render seine alten Werte zurück — er speichert bei jedem
+    Durchlauf.
+  * ui.pct() multipliziert selbst mit 100: in der Änderungsliste den Bruch
+    übergeben, nicht das Prozent (sonst steht 140.00 % statt 1.40 %).
+- Reset lässt swipay.db weiter unberührt (nur die Arbeitssitzung), sichert aber
+  vorher automatisch als Fall. Die Brand-Stammliste bleibt ebenfalls.
+- Tool-Version steht in src/version.py (TOOL_VERSION, Format aus dem Abschnitt
+  «Versionierung»). Sie erscheint in der Sidebar und in JEDER Fall-Datei —
+  eine Datei muss sagen können, womit sie entstanden ist.
 - Fixkosten und IC-Cap-Feinlogik = Phase 6, optional, nur bei konkretem Bedarf.
 
 ## Harter Validierungs-Anker (Davos-Datensatz)
@@ -252,7 +311,9 @@ Kopfzeile und Sidebar zeigen «Live» (vorher «IN ABNAHME»), auf Nutzer-Entsch
 
 ## Offen vor Kundeneinsatz
 - ASF-Defaults (Debit 0.30 %, Credit 0.35 %) sind Platzhalter. Vor jedem
-  Kundenlauf die echte SwiPay-Preisliste eintragen.
+  Kundenlauf die echte SwiPay-Preisliste eintragen — jetzt als Vorlage
+  (Einstellungen → ASF & DCC → Vorlagen, Art «Standardkonditionen»), damit sie
+  nicht bei jedem Kunden neu getippt werden muss.
 - Abnahme gegen die acht Davos-Anker fahren, bevor das Tool auf eine echte
   Kundendatei losgelassen wird.
 

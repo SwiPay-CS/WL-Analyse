@@ -20,6 +20,7 @@ import streamlit as st
 
 import ui
 import session_store
+import case_store as cases
 import hochrechnung_store as hoch_store
 from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
@@ -28,9 +29,12 @@ from aggregation import EntityInput, aggregate
 from view import BASIS_IST, BASIS_PA, RATE_DEC, build_view
 from db_groups import init_groups_db, get_groups, assign_group, unassign_group
 from reporter import build_pdf, build_csv
+from version import TOOL_VERSION
 from settings import (
     ALL_TYPES,
     OFFERABLE_TYPES,
+    TEMPLATE_ARTEN,
+    TEMPLATE_ART_LABEL,
     BrandRecord,
     BrandMaster,
     RateProfile,
@@ -38,8 +42,12 @@ from settings import (
     build_param_table,
     conservative_collapse,
     default_rate_profile,
+    delete_template,
+    list_templates,
     load_brand_master,
+    load_template,
     prefill_brand_overrides,
+    save_template,
 )
 
 st.set_page_config(page_title="SwiPay · Worldline-Vergleich", layout="wide",
@@ -248,10 +256,51 @@ with st.sidebar:
     page = st.session_state.nav
     st.markdown(
         '<div style="margin-top:1.4rem;font-size:.7rem;color:#8a9495;'
-        'letter-spacing:.04em">WL Compare · Live<br>IC++ gegen IC++</div>',
+        f'letter-spacing:.04em">WL Compare {TOOL_VERSION} · Live<br>'
+        'IC++ gegen IC++</div>',
         unsafe_allow_html=True)
 
 df = _ensure_month(st.session_state.df)
+
+
+def _case_name_guess(daten: list[dict]) -> str:
+    """Customer name from the export file name ("Analyse_Davos-Klosters.xlsb"
+    -> "Davos Klosters"). Only used to seed a name the user can rename."""
+    for entry in daten:
+        stem = Path(str(entry.get("file_name", ""))).stem
+        if not stem:
+            continue
+        for prefix in ("Analyse_", "Analyse-", "Export_", "Export-"):
+            if stem.startswith(prefix):
+                stem = stem[len(prefix):]
+        cleaned = " ".join(stem.replace("_", " ").replace("-", " ").split())
+        if cleaned:
+            return cleaned
+    return "Übernommener Stand"
+
+
+# One-time takeover: the state that exists on this machine today (Konditionen,
+# Gruppen, Hochrechnungen, loaded export) becomes a real case, so nothing that
+# was built by hand lives only in the working session. Runs once -- guarded by
+# the cases directory not existing yet.
+if not cases.CASES_DIR.exists():
+    try:
+        _daten = cases.resolve_data_files(DB_PATH, df)
+        _kunde = _case_name_guess(_daten)
+        _payload = cases.build_payload(
+            variant_name=f"Stand {pd.Timestamp.today().strftime('%Y-%m-%d')}",
+            variant_note="Automatisch übernommen beim Einführen der Fall-Speicherung.",
+            profile=profile, master=master,
+            groups=get_groups(DB_PATH),
+            partner_vols=hoch_store.get_partner_volumes(DB_PATH),
+            group_vols=hoch_store.get_group_volumes(DB_PATH),
+            auswahl={}, daten=_daten)
+        cases.save_variant(_kunde, _payload,
+                           kunde_notiz="Beim Einführen der Fall-Speicherung übernommen.",
+                           export_src=cases.find_export_source(_daten))
+    except Exception:
+        # Never let the takeover block the app; the Fälle tab can save manually.
+        cases.CASES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Gate: without data, only Einstellungen is useful.
 if df.empty and page != "Einstellungen":
@@ -269,11 +318,32 @@ def page_praesentation() -> None:
     months = _months(df)
     pid_col = "partner_id" if "partner_id" in df.columns else None
 
+    # Auswahl aus einem geladenen Fall wiederherstellen. Bewusst hier und nicht
+    # beim Laden: erst hier sind Optionen und Monate bekannt, und was die Daten
+    # nicht hergeben (Zeitraum ausserhalb) wird gesagt statt still verschoben.
+    _res = st.session_state.pop("auswahl_restore", None)
+    _res_notes: list[str] = []
+    _res_sel: list[str] = []
+    _res_range = None
+    if _res:
+        _res_sel = [s for s in _res.get("partner_gruppen") or []]
+        _z = _res.get("zeitraum") or []
+        if len(_z) == 2 and _z[0] in months and _z[1] in months:
+            _res_range = (_z[0], _z[1])
+        elif _z:
+            _res_notes.append(
+                f"Zeitraum des Falls ({_z[0]} bis {_z[1]}) liegt nicht in den "
+                "geladenen Daten — es gilt der vollständige Zeitraum.")
+        if _res.get("basis"):
+            st.session_state["praes_basis"] = (
+                "Hochrechnung p.a." if _res["basis"] == BASIS_PA else "Ist-Zeitraum")
+
     # Selection row
     c1, c2, c3 = st.columns([1.15, 1.75, 1.1])
     with c1:
         scope = st.radio("Auswahl", ["Alle", "Auswahl"], horizontal=True,
-                         label_visibility="collapsed")
+                         label_visibility="collapsed",
+                         index=1 if (_res and _res.get("scope") == "Auswahl") else 0)
     groups = get_groups(DB_PATH)
     sel_display: list[str] = []
     sel_group_names: list[str] = []
@@ -284,8 +354,13 @@ def page_praesentation() -> None:
             partner_opts = _merchant_options(df, pid_col) if pid_col else []
             group_opts = [f"👥 {g}" for g in groups]
             combined_opts = sorted(partner_opts + group_opts, key=str.lower)
+            _valid = [s for s in _res_sel if s in combined_opts]
+            if _res_sel and len(_valid) < len(_res_sel):
+                _res_notes.append(
+                    "Nicht mehr vorhanden: "
+                    + ", ".join(f"«{s}»" for s in _res_sel if s not in combined_opts))
             sel_display = st.multiselect(
-                "Partner/Gruppe", combined_opts, default=[],
+                "Partner/Gruppe", combined_opts, default=_valid,
                 label_visibility="collapsed",
                 placeholder="Partner oder Gruppe suchen (Name oder Partner-ID)")
             sel_group_names = [s[2:] for s in sel_display if s.startswith("👥 ")]
@@ -298,7 +373,7 @@ def page_praesentation() -> None:
     frm = to = None
     if len(months) >= 2:
         frm, to = st.select_slider("Zeitraum", options=months,
-                                   value=(months[0], months[-1]))
+                                   value=_res_range or (months[0], months[-1]))
     elif months:
         frm = to = months[0]
 
@@ -368,6 +443,17 @@ def page_praesentation() -> None:
             basis = BASIS_IST
             st.caption("Keine Hochrechnung hinterlegt — **Einstellungen → "
                        "Merchants → Hochrechnung**.")
+
+    # Was gerade gezeigt wird -- der Fälle-Tab liest das beim Speichern. Ein
+    # Fall ohne Auswahl liesse dieselbe Datenbasis mit anderem Scope zu, und
+    # das ergäbe eine andere Zahl im Hero.
+    st.session_state["auswahl_snapshot"] = {
+        "scope": scope, "partner_gruppen": list(sel_display),
+        "zeitraum": [frm, to], "basis": basis,
+    }
+    if _res_notes:
+        ui.info_banner("Aus dem Fall übernommen — mit Abweichungen: "
+                       + " · ".join(_res_notes))
 
     v = build_view(agg, t, d, basis)
     acc_total = ui.GREEN if v.total >= 0 else ui.ROT
@@ -652,12 +738,32 @@ def page_praesentation() -> None:
                                         if st.session_state.report else []),
                     zero_effect_brands=zero_brands,
                     mix_hints=[])
-                st.download_button("PDF herunterladen", data=pdf_bytes,
-                    file_name=f"SwiPay_Analyse_{partner_disp}_{frm}_{to}.pdf"
-                    .replace(" ", "_").replace(",", "").replace("/", "-"),
-                    mime="application/pdf")
+                # Bytes festhalten: der Download-Klick löst einen Rerun aus, in
+                # dem der Generieren-Knopf wieder False ist. Ausserdem braucht
+                # der Ablage-Knopf unten dieselben Bytes.
+                st.session_state["last_pdf"] = (
+                    pdf_bytes,
+                    f"SwiPay_Analyse_{partner_disp}_{frm}_{to}.pdf"
+                    .replace(" ", "_").replace(",", "").replace("/", "-"))
             except Exception as exc:
                 st.error(f"PDF-Fehler: {exc}")
+        _last = st.session_state.get("last_pdf")
+        if _last:
+            _bytes, _fname = _last
+            st.download_button("PDF herunterladen", data=_bytes,
+                               file_name=_fname, mime="application/pdf")
+            _act = st.session_state.get("active_case")
+            if _act:
+                if st.button(f"Zum Fall «{_act['kunde_name']}» ablegen"):
+                    try:
+                        _p = cases.save_report(_act["kunde_slug"], _bytes,
+                                               label=_act["variant_name"])
+                        st.success(f"Bericht abgelegt: {_p.name}")
+                    except Exception as exc:
+                        st.error(f"Ablage fehlgeschlagen: {exc}")
+            else:
+                st.caption("Kein Fall aktiv — unter **Einstellungen → Fälle** "
+                           "speichern, dann kann der Bericht dort abgelegt werden.")
     with b:
         st.download_button("Detail-CSV herunterladen",
                            data=build_csv(fdf, comp).encode("utf-8-sig"),
@@ -1144,6 +1250,222 @@ def page_merchants() -> None:
                     c.write(v)
 
 
+def _load_note(dfn, rpt) -> tuple[str, str]:
+    """Was der Ingest wirklich getan hat — nie «0 Zeilen geladen» neben Daten.
+
+    Drei Fälle: neue Zeilen · Datei bit-identisch blockiert · Datei neu, aber
+    jede Zeile schon registriert (derselbe Export neu gespeichert).
+    """
+    if rpt.rows_new:
+        return ("ok", f"{num(rpt.rows_new)} Zeilen geladen.")
+    if getattr(rpt, "files_known_rows", None):
+        return ("info",
+                f"{', '.join(rpt.files_known_rows)}: Datei ist neu, aber jede "
+                f"Zeile war bereits registriert (derselbe Export, neu "
+                f"gespeichert). {num(len(dfn))} Zeilen werden angezeigt, "
+                "nichts doppelt gezählt.")
+    if rpt.files_blocked_hash:
+        return ("info",
+                f"{', '.join(rpt.files_blocked_hash)}: bit-identisch bereits "
+                f"eingelesen. {num(len(dfn))} Zeilen werden angezeigt.")
+    return ("info", f"{num(len(dfn))} Zeilen angezeigt, keine neuen Zeilen.")
+
+
+# ── Fälle & Vorlagen: Helfer ─────────────────────────────────────────────────
+
+def _fmt_when(iso: str) -> str:
+    """ISO-UTC aus einer Fall-Datei als Schweizer Lokalzeit."""
+    if not iso:
+        return "—"
+    try:
+        return (pd.to_datetime(iso, utc=True).tz_convert("Europe/Zurich")
+                .strftime("%d.%m.%Y %H:%M"))
+    except Exception:
+        return str(iso)[:16].replace("T", " ")
+
+
+def _forget_kondition_widgets() -> None:
+    """Widget-Keys der Konditionen vergessen.
+
+    Pflicht nach jedem programmatischen Setzen von st.session_state.profile:
+    die Zahlenfelder im ASF-Tab würden sonst im nächsten Render ihre ALTEN
+    Werte zurückschreiben (session_store.save_profile läuft dort bei jedem
+    Durchlauf) und das Geladene sofort überschreiben.
+    """
+    for _t in OFFERABLE_TYPES:
+        for _pfx in ("asf_", "trx_", "mf_"):
+            st.session_state.pop(f"{_pfx}{_t}", None)
+    st.session_state.pop("dcc_in", None)
+    st.session_state.pop("expert_editor", None)
+
+
+def _current_payload(variant_name: str, note: str = "") -> dict:
+    """Der aktuelle Arbeitsstand als Fall-Payload."""
+    basis = (st.session_state.get("applied_vorlage")
+             or (st.session_state.get("active_case") or {}).get("vorlage") or {})
+    return cases.build_payload(
+        variant_name=variant_name, variant_note=note,
+        profile=profile, master=master,
+        groups=get_groups(DB_PATH),
+        partner_vols=hoch_store.get_partner_volumes(DB_PATH),
+        group_vols=hoch_store.get_group_volumes(DB_PATH),
+        auswahl=st.session_state.get("auswahl_snapshot") or {},
+        daten=cases.resolve_data_files(DB_PATH, df),
+        vorlage_name=basis.get("name", ""), vorlage_art=basis.get("art", ""))
+
+
+def _stage_case(payload: dict, quelle: str, kunde_slug: str = "",
+                kunde_name: str = "") -> None:
+    """Fall vormerken. Geschrieben wird erst nach der Änderungsliste."""
+    st.session_state["case_pending"] = {
+        "payload": payload, "quelle": quelle,
+        "kunde_slug": kunde_slug, "kunde_name": kunde_name,
+    }
+
+
+def _apply_case(payload: dict, new_brands: list[str], kunde_slug: str,
+                kunde_name: str) -> None:
+    """Fall übernehmen: sichern, dann schreiben.
+
+    Der Autosave läuft ZUERST und fängt damit die ALTEN Hochrechnungen und
+    Gruppen ein — ein versehentlicher Import bleibt umkehrbar.
+    """
+    snap = cases.autosave("Vor Fallwechsel", profile=profile, master=master,
+                          db_path=DB_PATH, df=df,
+                          auswahl=st.session_state.get("auswahl_snapshot"))
+
+    cases.apply_merchants(DB_PATH, payload)
+
+    st.session_state.profile = cases.profile_from_payload(payload)
+    session_store.save_profile(st.session_state.profile)
+    _forget_kondition_widgets()
+
+    if new_brands:
+        merged = cases.merge_new_brands(master, payload, new_brands)
+        merged.save()
+        st.session_state.master = merged
+        st.session_state.pop("master_editor", None)
+
+    if payload.get("auswahl"):
+        st.session_state["auswahl_restore"] = payload["auswahl"]
+
+    st.session_state["active_case"] = {
+        "kunde_slug": kunde_slug, "kunde_name": kunde_name,
+        "variant_name": payload.get("variante", {}).get("name", ""),
+        "gespeichert_am": payload.get("gespeichert_am", ""),
+        "vorlage": payload.get("basis", {}),
+    }
+    st.session_state.pop("case_pending", None)
+    st.session_state.pop("last_pdf", None)
+    st.session_state["case_flash"] = (
+        f"Fall «{kunde_name} · {payload.get('variante', {}).get('name', '')}» "
+        f"übernommen. Vorheriger Stand gesichert als «{snap.name}».")
+
+
+def _render_case_panel() -> None:
+    """Änderungsliste vor dem Übernehmen. Ein Codepfad für Laden und Import."""
+    pend = st.session_state.get("case_pending")
+    if not pend:
+        return
+    payload = pend["payload"]
+    kunde_name = pend.get("kunde_name") or "Import"
+    vname = payload.get("variante", {}).get("name", "—")
+
+    ui.section(f"Übernehmen: {kunde_name} · {vname}",
+               f"Quelle: {pend['quelle']} · gespeichert {_fmt_when(payload.get('gespeichert_am',''))}")
+
+    # 1) Datenabgleich
+    dm = cases.match_data(payload.get("daten", []),
+                          cases.resolve_data_files(DB_PATH, df))
+    exp_txt = ", ".join(f"{e.get('file_name')} ({num(e.get('rows', 0))} Zeilen)"
+                        for e in dm.expected) or "keine hinterlegt"
+    if dm.state == "match":
+        st.success(f"Datenabgleich: geladener Export passt zum Fall — {exp_txt}.")
+    elif dm.state == "none":
+        st.info(f"Kein passender Export geladen. Der Fall gehört zu: {exp_txt}. "
+                "Konditionen und Hinterlegungen lassen sich trotzdem übernehmen.")
+    else:
+        st.error("Der geladene Export ist **nicht** der des Falls "
+                 f"(Fall: {exp_txt} · geladen: "
+                 + ", ".join(f.get("file_name", "?") for f in dm.found)
+                 + "). Die Zahlen werden vom archivierten Stand abweichen.")
+
+    # 2) Partner, die es in den Daten nicht gibt
+    miss = cases.missing_partners(payload, df)
+    if miss:
+        st.warning(f"Im Fall hinterlegt, in den Daten nicht gefunden: {len(miss)} "
+                   "Partner-ID(s) — " + ", ".join(miss[:12])
+                   + (" …" if len(miss) > 12 else "")
+                   + ". Deren Hochrechnung bleibt ohne Wirkung.")
+
+    # 3) Konditionen
+    old, new = profile, cases.profile_from_payload(payload)
+    # ui.pct() multipliziert selbst mit 100 -- den Bruch übergeben, nicht das
+    # Prozent, sonst steht 140.00 % statt 1.40 % in der Änderungsliste.
+    krows = [{"Kondition": "DCC-Satz", "Aktuell": pct(old.dcc_pct),
+              "Fall": pct(new.dcc_pct)}]
+    for tkey in OFFERABLE_TYPES:
+        o, nw = old.type_rates.get(tkey), new.type_rates.get(tkey)
+        if o and nw:
+            krows += [
+                {"Kondition": f"ASF {_TYPE_LABEL[tkey]}",
+                 "Aktuell": f"{o.asf_pct*100:.3f} %", "Fall": f"{nw.asf_pct*100:.3f} %"},
+                {"Kondition": f"Trx-Fee {_TYPE_LABEL[tkey]}",
+                 "Aktuell": f"{o.trx_fee*100:.2f} Rp.", "Fall": f"{nw.trx_fee*100:.2f} Rp."},
+                {"Kondition": f"Mindestgeb. {_TYPE_LABEL[tkey]}",
+                 "Aktuell": chf(o.min_fee), "Fall": chf(nw.min_fee)}]
+    changed = [r for r in krows if r["Aktuell"] != r["Fall"]]
+    st.markdown("**Konditionen**")
+    if changed:
+        st.dataframe(pd.DataFrame(changed), hide_index=True, use_container_width=True)
+    else:
+        st.caption("Unverändert.")
+
+    # 4) Brand-Stammliste — der Master gewinnt, Abweichung sichtbar
+    bd = cases.diff_brands(master, payload)
+    st.markdown("**Brand-Stammliste**")
+    picked: list[str] = []
+    if bd.identical:
+        st.caption("Deckt sich mit der Stammliste.")
+    else:
+        if bd.conflicts:
+            st.warning("Die Stammliste bleibt unverändert (sie ist geteilt und "
+                       "git-versioniert). Abweichungen des Falls:")
+            st.dataframe(pd.DataFrame(bd.conflicts), hide_index=True,
+                         use_container_width=True)
+        if bd.new_brands:
+            st.caption("Brands, die nur der Fall kennt — additiv übernehmbar:")
+            st.dataframe(pd.DataFrame(bd.new_brands), hide_index=True,
+                         use_container_width=True)
+            picked = st.multiselect(
+                "Diese Brands in die Stammliste aufnehmen",
+                [b["Brand"] for b in bd.new_brands], default=[],
+                key="case_new_brands")
+
+    # 5) swipay.db
+    dd = cases.diff_db(DB_PATH, payload)
+    st.markdown("**Gruppen und Hochrechnungen (swipay.db)**")
+    if dd.empty:
+        st.caption("Keine Änderung.")
+    else:
+        st.dataframe(pd.DataFrame(dd.rows), hide_index=True, use_container_width=True)
+        st.caption(f"{len(dd.rows)} Eintrag/Einträge werden geschrieben. Der "
+                   "vorherige Stand wird vorher automatisch als Fall gesichert.")
+
+    c1, c2 = st.columns([1, 3])
+    if c1.button("Übernehmen", type="primary", key="case_apply"):
+        try:
+            _apply_case(payload, picked, pend.get("kunde_slug") or cases.slugify(kunde_name),
+                        kunde_name)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Übernehmen fehlgeschlagen: {exc}")
+    if c2.button("Abbrechen", key="case_cancel"):
+        st.session_state.pop("case_pending", None)
+        st.session_state.pop("case_new_brands", None)
+        st.rerun()
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE: EINSTELLUNGEN  (Upload · Mapping · ASF)
 # ════════════════════════════════════════════════════════════════════════════
@@ -1151,12 +1473,16 @@ def page_einstellungen() -> None:
     ui.page_header("Einstellungen", "Import, Brand-Mapping, Konditionen, Merchants.",
                    status="Konfiguration", meta="Import · Mapping · ASF · Merchants")
     with st.container(key="settings_tabs"):
-        tab_up, tab_map, tab_asf, tab_merch, tab_reset = st.tabs(
-            ["Import", "Mapping (Brands)", "ASF & DCC", "Merchants", "Reset"])
+        tab_up, tab_map, tab_asf, tab_merch, tab_cases, tab_reset = st.tabs(
+            ["Import", "Mapping (Brands)", "ASF & DCC", "Merchants", "Fälle",
+             "Reset"])
 
     # ── Upload ──
     with tab_up:
         ui.section("Worldline-Export laden")
+        _note = st.session_state.pop("load_note", None)
+        if _note:
+            (st.success if _note[0] == "ok" else st.info)(_note[1])
         uploaded = st.file_uploader("Worldline-Exporte (XLSB / CSV)",
                                     type=["xlsb", "csv"], accept_multiple_files=True)
         sheet_val = st.text_input("Sheet-Name (XLSB, leer = erstes Sheet)", value="WL")
@@ -1171,7 +1497,7 @@ def page_einstellungen() -> None:
                 dfn, rpt = ingest_files(paths, DB_PATH, sheet=sheet_val.strip() or None)
                 st.session_state.df = dfn; st.session_state.report = rpt
                 session_store.save_df(dfn)
-                st.success(f"{num(rpt.rows_new)} Zeilen geladen.")
+                st.session_state["load_note"] = _load_note(dfn, rpt)
                 st.rerun()
             except Exception as exc:
                 st.error(f"Fehler beim Laden: {exc}")
@@ -1191,7 +1517,7 @@ def page_einstellungen() -> None:
                                             sheet=sheet_val.strip() or None)
                     st.session_state.df = dfn; st.session_state.report = rpt
                     session_store.save_df(dfn)
-                    st.success(f"«{pick}» geladen.")
+                    st.session_state["load_note"] = _load_note(dfn, rpt)
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Fehler beim Laden: {exc}")
@@ -1325,6 +1651,55 @@ def page_einstellungen() -> None:
                 str(r["Brand"]): TypeRate(float(r["ASF %"])/100.0,
                                           float(r["Trx-Fee Rp."])/100.0, float(r["Min CHF"]))
                 for _, r in ed.iterrows()}
+        # ── Vorlagen ─────────────────────────────────────────────────────
+        # Wiederverwendbares Preisblatt OHNE Kundenbezug (config/profiles/,
+        # git-versioniert) — im Gegensatz zum Fall (data/cases/, gitignored).
+        ui.section("Vorlagen", "Standard · Verband · Rahmenvertrag")
+        _tmpls = list_templates()
+        v1, v2 = st.columns(2)
+        with v1:
+            st.markdown("**Vorlage anwenden**")
+            if not _tmpls:
+                st.caption("Noch keine Vorlage hinterlegt. Rechts die aktuellen "
+                           "Konditionen sichern — dann steht hier das echte "
+                           "SwiPay-Preisblatt statt der Platzhalter.")
+            else:
+                _lbl = {f"{m.art_label} · {m.name}": m for m in _tmpls}
+                _sel = st.selectbox("Vorlage", list(_lbl), key="tmpl_pick")
+                _meta = _lbl[_sel]
+                st.caption((_meta.notiz + " · " if _meta.notiz else "")
+                           + f"geändert {_fmt_when(_meta.updated_at)}")
+                t1, t2 = st.columns([1, 1])
+                if t1.button("Anwenden", key="tmpl_apply"):
+                    try:
+                        _prof, _m = load_template(_meta.name)
+                        st.session_state.profile = _prof
+                        session_store.save_profile(_prof)
+                        _forget_kondition_widgets()
+                        st.session_state["applied_vorlage"] = {
+                            "name": _m.name, "art": _m.art}
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Vorlage nicht ladbar: {exc}")
+                if t2.button("Löschen", key="tmpl_del"):
+                    delete_template(_meta.name)
+                    st.session_state.pop("tmpl_pick", None)
+                    st.rerun()
+        with v2:
+            st.markdown("**Aktuelle Konditionen als Vorlage sichern**")
+            _tn = st.text_input("Name", key="tmpl_name",
+                                placeholder="z. B. SwiPay Standard 2026")
+            _ta = st.selectbox("Art", TEMPLATE_ARTEN, key="tmpl_art",
+                               format_func=lambda a: TEMPLATE_ART_LABEL[a])
+            _tz = st.text_input("Notiz (optional)", key="tmpl_notiz")
+            if st.button("Als Vorlage speichern", key="tmpl_save"):
+                try:
+                    _p = save_template(profile, _tn.strip(), _ta, _tz.strip())
+                    st.success(f"Vorlage gespeichert: {_p.name}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Konnte nicht speichern: {exc}")
+
         st.session_state.profile = profile
         session_store.save_profile(profile)
 
@@ -1483,6 +1858,206 @@ def page_einstellungen() -> None:
 
                 hoch_store.save_volumes(DB_PATH, partner_updates, group_updates)
 
+    # ── Fälle ──
+    with tab_cases:
+        _flash = st.session_state.pop("case_flash", None)
+        if _flash:
+            st.success(_flash)
+
+        if st.session_state.get("case_pending"):
+            _render_case_panel()
+        else:
+            _act = st.session_state.get("active_case")
+            if _act:
+                ui.info_banner(
+                    f"Aktiver Fall: <b>{_act['kunde_name']} · "
+                    f"{_act['variant_name']}</b> — gespeichert "
+                    f"{_fmt_when(_act.get('gespeichert_am',''))}")
+
+            # ── Speichern ────────────────────────────────────────────────────
+            ui.section("Aktuellen Stand speichern",
+                       "Konditionen, Gruppen, Hochrechnungen, Auswahl und der "
+                       "zugehörige Export.")
+            _custs = cases.list_customers()
+            _names = [c.name for c in _custs if not c.is_autosave]
+            _NEW = "➕ Neuer Kunde"
+            _opts = [_NEW] + _names
+            _idx = (_opts.index(_act["kunde_name"])
+                    if _act and _act.get("kunde_name") in _opts else 0)
+            s1, s2 = st.columns(2)
+            with s1:
+                _pick = st.selectbox("Kunde", _opts, index=_idx, key="case_kunde_pick")
+                _kunde = (st.text_input("Name des Kunden", key="case_kunde_new")
+                          if _pick == _NEW else _pick)
+            with s2:
+                _def_var = (_act["variant_name"] if _act
+                            and _act.get("kunde_name") == _pick
+                            else f"Stand {pd.Timestamp.today().strftime('%Y-%m-%d')}")
+                _variant = st.text_input("Variante", value=_def_var, key="case_variant")
+            _notiz = st.text_input("Notiz (optional)", key="case_notiz")
+
+            _daten = cases.resolve_data_files(DB_PATH, df)
+            _src = cases.find_export_source(_daten)
+            if _daten:
+                st.caption("Datengrundlage: "
+                           + ", ".join(f"{d['file_name']} ({num(d['rows'])} Zeilen)"
+                                       for d in _daten)
+                           + (f" · Kopie im Fall: {_src.name}" if _src
+                              else " · Originaldatei nicht in data/ gefunden — "
+                                   "der Fall speichert nur Name und Hash."))
+            else:
+                st.caption("Keine Daten geladen — der Fall hält nur Konditionen "
+                           "und Hinterlegungen.")
+
+            if st.button("Fall speichern", type="primary", key="case_save"):
+                try:
+                    if not str(_kunde).strip():
+                        raise cases.CaseError("Bitte einen Kundennamen angeben.")
+                    if not str(_variant).strip():
+                        raise cases.CaseError("Bitte einen Variantennamen angeben.")
+                    _pl = _current_payload(_variant.strip(), _notiz.strip())
+                    _info = cases.save_variant(
+                        _kunde.strip(), _pl, kunde_notiz=None, export_src=_src)
+                    st.session_state["active_case"] = {
+                        "kunde_slug": _info.kunde_slug, "kunde_name": _info.kunde_name,
+                        "variant_name": _info.name,
+                        "gespeichert_am": _info.gespeichert_am,
+                        "vorlage": _pl.get("basis", {})}
+                    st.session_state["case_flash"] = (
+                        f"Gespeichert: {_info.kunde_name} · {_info.name}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Speichern fehlgeschlagen: {exc}")
+
+            # ── Rename-Dialog ────────────────────────────────────────────────
+            _ren = st.session_state.get("rename_pending")
+            if _ren:
+                ui.section("Variante umbenennen")
+                _new = st.text_input("Neuer Name", value=_ren["name"],
+                                     key="rename_input")
+                r1, r2 = st.columns([1, 3])
+                if r1.button("Umbenennen", type="primary", key="rename_go"):
+                    try:
+                        cases.rename_variant(_ren["kunde_slug"], _ren["slug"], _new)
+                        st.session_state.pop("rename_pending", None)
+                        st.session_state["case_flash"] = f"Umbenannt in «{_new}»."
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc))
+                if r2.button("Abbrechen", key="rename_cancel"):
+                    st.session_state.pop("rename_pending", None)
+                    st.rerun()
+
+            # ── Lösch-Bestätigung ────────────────────────────────────────────
+            _del = st.session_state.get("del_pending")
+            if _del:
+                ui.section("Löschen bestätigen")
+                if _del.get("kind") == "customer":
+                    st.warning(
+                        f"Kunde **{_del['kunde_name']}** vollständig entfernen — "
+                        f"inklusive Export-Kopie und abgelegter Berichte "
+                        f"({_del.get('size','')}). Das ist nicht umkehrbar.")
+                else:
+                    st.warning(f"Variante **{_del['name']}** von "
+                               f"{_del['kunde_name']} löschen.")
+                d1, d2 = st.columns([1, 3])
+                if d1.button("Endgültig löschen", type="primary", key="del_go"):
+                    try:
+                        if _del.get("kind") == "customer":
+                            cases.delete_customer(_del["kunde_slug"])
+                            if (st.session_state.get("active_case") or {}).get(
+                                    "kunde_slug") == _del["kunde_slug"]:
+                                st.session_state.pop("active_case", None)
+                            st.session_state["case_flash"] = (
+                                f"Kunde «{_del['kunde_name']}» entfernt.")
+                        else:
+                            _left = cases.delete_variant(_del["kunde_slug"],
+                                                         _del["slug"])
+                            st.session_state["case_flash"] = (
+                                f"Variante «{_del['name']}» gelöscht."
+                                + (" Der Kunde hat keine Variante mehr — Export-"
+                                   "Kopie und Berichte liegen weiter da."
+                                   if _left == 0 else ""))
+                        st.session_state.pop("del_pending", None)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc))
+                if d2.button("Abbrechen", key="del_cancel"):
+                    st.session_state.pop("del_pending", None)
+                    st.rerun()
+
+            # ── Liste ────────────────────────────────────────────────────────
+            ui.section("Gespeicherte Fälle",
+                       f"{len(_custs)} Kunde(n) · Ablage data/cases/")
+            if not _custs:
+                st.caption("Noch nichts gespeichert.")
+            for c in _custs:
+                _mb = c.bytes_used / 1_048_576
+                _title = (f"{'🕓' if c.is_autosave else '📁'} {c.name} — "
+                          f"{len(c.variants)} Variante(n) · {_mb:.1f} MB")
+                with st.expander(_title, expanded=False):
+                    if c.notiz:
+                        st.caption(c.notiz)
+                    if c.export_files:
+                        st.caption("Export im Fall: " + ", ".join(c.export_files))
+                    for v in c.variants:
+                        w = st.columns([2.2, 1.3, 0.9, 0.95, 1.35, 0.95])
+                        w[0].markdown(f"**{v.name}**"
+                                      + (f"  \n<span style='font-size:.75rem;"
+                                         f"color:#8a9495'>{v.notiz}</span>"
+                                         if v.notiz else ""),
+                                      unsafe_allow_html=True)
+                        w[1].caption(_fmt_when(v.gespeichert_am))
+                        if w[2].button("Laden", key=f"ld_{c.slug}_{v.slug}"):
+                            try:
+                                _stage_case(cases.load_variant(c.slug, v.slug),
+                                            f"Fall {c.name}", c.slug, c.name)
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(str(exc))
+                        try:
+                            _pl = cases.load_variant(c.slug, v.slug)
+                            w[3].download_button(
+                                "Export", data=cases.export_bytes(_pl),
+                                file_name=cases.export_filename(c.name, _pl),
+                                mime="application/json",
+                                key=f"ex_{c.slug}_{v.slug}")
+                        except Exception:
+                            w[3].caption("defekt")
+                        if w[4].button("Umbenennen", key=f"rn_{c.slug}_{v.slug}"):
+                            st.session_state["rename_pending"] = {
+                                "kunde_slug": c.slug, "slug": v.slug, "name": v.name}
+                            st.rerun()
+                        if w[5].button("Löschen", key=f"dl_{c.slug}_{v.slug}"):
+                            st.session_state["del_pending"] = {
+                                "kind": "variant", "kunde_slug": c.slug,
+                                "kunde_name": c.name, "slug": v.slug, "name": v.name}
+                            st.rerun()
+                    if st.button(f"Kunde «{c.name}» ganz entfernen",
+                                 key=f"dc_{c.slug}"):
+                        st.session_state["del_pending"] = {
+                            "kind": "customer", "kunde_slug": c.slug,
+                            "kunde_name": c.name, "size": f"{_mb:.1f} MB"}
+                        st.rerun()
+
+            # ── Import ───────────────────────────────────────────────────────
+            ui.section("Fall importieren",
+                       "Config-Datei aus einem anderen Lauf oder von einem "
+                       "anderen Rechner.")
+            _up = st.file_uploader(f"Fall-Datei ({cases.EXPORT_SUFFIX})",
+                                   type=["json"], key="case_import")
+            if _up is not None and st.button("Datei prüfen", key="case_import_go"):
+                try:
+                    _pl = cases.parse_import(_up.read())
+                    _kn = Path(_up.name).name.split("--")[0].replace("-", " ").title()
+                    _stage_case(_pl, f"Import {_up.name}", cases.slugify(_kn), _kn)
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Import nicht möglich: {exc}")
+            st.caption("Fall-Dateien enthalten Vertragsdaten (Partner-IDs, Namen, "
+                       "Jahresumsätze) — vertraulich behandeln. Keine "
+                       "Transaktionszeilen, keine Kartennummern.")
+
     # ── Reset ──
     with tab_reset:
         ui.section("Analyse zurücksetzen",
@@ -1492,6 +2067,18 @@ def page_einstellungen() -> None:
                    "hinterlegte Hochrechnungen (swipay.db) bleiben unberührt.")
         confirm = st.checkbox("Ja, aktuelle Daten und Konditionen verwerfen.")
         if st.button("Reset", type="primary", disabled=not confirm):
+            # Immer zuerst sichern: der Verlust wird strukturell unmöglich
+            # statt disziplinabhängig. Ohne Export-Kopie (die Datei liegt noch
+            # in data/), dafür mit den DB-Werten von JETZT.
+            try:
+                _snap = cases.autosave("Vor Reset", profile=profile, master=master,
+                                       db_path=DB_PATH, df=df,
+                                       auswahl=st.session_state.get("auswahl_snapshot"))
+                st.info(f"Vorher gesichert als **{cases.AUTOSAVE_NAME} · "
+                        f"{_snap.name}** (Einstellungen → Fälle).")
+            except Exception as exc:
+                st.error(f"Autosave fehlgeschlagen — Reset abgebrochen: {exc}")
+                st.stop()
             session_store.reset()
             st.session_state.df = pd.DataFrame()
             st.session_state.report = None
@@ -1500,6 +2087,8 @@ def page_einstellungen() -> None:
                 for _pfx in ("asf_", "trx_", "mf_"):
                     st.session_state.pop(f"{_pfx}{_t}", None)
             st.session_state.pop("dcc_in", None)
+            st.session_state.pop("active_case", None)
+            st.session_state.pop("last_pdf", None)
             for _k in [k for k in st.session_state
                        if isinstance(k, str) and (k.startswith("hoch_vol_")
                                                   or k.startswith("hoch_open_"))]:

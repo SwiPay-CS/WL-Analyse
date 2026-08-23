@@ -3,6 +3,7 @@ reconcile, engine wiring, and the schnell/experte mode transitions."""
 
 import pytest
 
+import settings as s
 from settings import (
     BrandMaster,
     BrandRecord,
@@ -129,3 +130,66 @@ def test_shipped_brand_master_loads_and_covers_known_brands():
                  "Maestro", "Maestro-CH", "V PAY", "Diners/Discover", "Union Pay"]:
         assert m.match(code) is not None, f"{code} fehlt in der Stammliste"
     assert m.match("TWINT").offerable is False
+
+
+# ── Vorlagen (templates) ────────────────────────────────────────────────────
+# A Vorlage is a reusable price sheet with no customer reference: the SwiPay
+# standard list, an association rate, a framework contract. Separate from a
+# Fall (case_store.py) on purpose.
+
+def _tmpl_profile() -> s.RateProfile:
+    return s.RateProfile(
+        dcc_pct=0.0185,
+        type_rates={
+            "debit": s.TypeRate(0.0008, 0.01, 0.0),
+            "credit": s.TypeRate(0.0016, 0.01, 0.0),
+            "credit2": s.TypeRate(0.0016, 0.01, 0.0),
+        },
+    )
+
+
+def test_template_roundtrip_keeps_rates_and_metadata(tmp_path):
+    s.save_template(_tmpl_profile(), "SwiPay Standard 2026", "standard",
+                    "Echtes Preisblatt", profiles_dir=tmp_path)
+    prof, meta = s.load_template("SwiPay Standard 2026", profiles_dir=tmp_path)
+    assert prof.type_rates["debit"].asf_pct == 0.0008
+    assert prof.dcc_pct == 0.0185
+    assert meta.art == "standard"
+    assert meta.art_label == "Standardkonditionen"
+    assert meta.notiz == "Echtes Preisblatt"
+    assert meta.updated_at            # stamped on save
+
+
+def test_template_rejects_unknown_art_and_empty_name(tmp_path):
+    import pytest
+    with pytest.raises(ValueError):
+        s.save_template(_tmpl_profile(), "X", "hausintern", profiles_dir=tmp_path)
+    with pytest.raises(ValueError):
+        s.save_template(_tmpl_profile(), "   ", "standard", profiles_dir=tmp_path)
+
+
+def test_list_templates_groups_by_art_then_name(tmp_path):
+    s.save_template(_tmpl_profile(), "Zebra Rahmen", "rahmenvertrag",
+                    profiles_dir=tmp_path)
+    s.save_template(_tmpl_profile(), "Hotellerie", "verband", profiles_dir=tmp_path)
+    s.save_template(_tmpl_profile(), "Standard 2026", "standard", profiles_dir=tmp_path)
+    assert [m.name for m in s.list_templates(tmp_path)] == [
+        "Standard 2026", "Hotellerie", "Zebra Rahmen"]
+
+
+def test_a_plain_rate_profile_file_still_loads_as_a_template(tmp_path):
+    # Files written before the metadata fields existed must not break the list.
+    _tmpl_profile().save("alt", profiles_dir=tmp_path)
+    metas = s.list_templates(tmp_path)
+    assert [m.name for m in metas] == ["alt"]
+    assert metas[0].art == "standard"
+    prof, meta = s.load_template("alt", profiles_dir=tmp_path)
+    assert prof.dcc_pct == 0.0185
+    assert meta.updated_at == ""
+
+
+def test_delete_template_is_idempotent(tmp_path):
+    s.save_template(_tmpl_profile(), "weg", "standard", profiles_dir=tmp_path)
+    s.delete_template("weg", profiles_dir=tmp_path)
+    s.delete_template("weg", profiles_dir=tmp_path)
+    assert s.list_templates(tmp_path) == []
