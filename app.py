@@ -1814,7 +1814,12 @@ def page_einstellungen() -> None:
                     _tprof = None
                     st.error(f"Vorlage nicht lesbar: {exc}")
 
-                t1, t2 = st.columns(2)
+                # Vier Aktionen in EINER Reihe. Die Spalten sind leicht nach
+                # Label-Länge gewichtet: bei vier gleichen Spalten bricht
+                # «Überschreiben» als längstes Label um, während daneben Platz
+                # verfällt. Unter ~1200 px Fensterbreite wird es für vier
+                # Knöpfe in der halben Spalte ohnehin eng.
+                t1, t2, t3, t4 = st.columns([1, 1.3, 1.1, 0.95])
                 if t1.button("Anwenden", key="tmpl_apply", disabled=_tprof is None):
                     st.session_state.profile = _tprof
                     session_store.save_profile(_tprof)
@@ -1829,7 +1834,6 @@ def page_einstellungen() -> None:
                     st.session_state["tmpl_pending"] = {
                         "mode": "overwrite", "name": _meta.name}
                     st.rerun()
-                t3, t4 = st.columns(2)
                 if t3.button("Bearbeiten", key="tmpl_edit",
                              help="Name, Art und Notiz ändern — die Sätze "
                                   "bleiben unangetastet."):
