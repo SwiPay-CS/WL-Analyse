@@ -1,0 +1,25 @@
+{
+  "dcc_pct": 0.018500000000000003,
+  "mode": "schnell",
+  "type_rates": {
+    "debit": {
+      "asf_pct": 0.0008,
+      "trx_fee": 0.0001,
+      "min_fee": 0.0
+    },
+    "credit": {
+      "asf_pct": 0.0016,
+      "trx_fee": 0.0001,
+      "min_fee": 0.0
+    },
+    "credit2": {
+      "asf_pct": 0.0016,
+      "trx_fee": 0.0001,
+      "min_fee": 0.0
+    }
+  },
+  "brand_overrides": {},
+  "art": "verband",
+  "notiz": "2025",
+  "updated_at": "2026-09-10T19:36:07.270487+00:00"
+}
