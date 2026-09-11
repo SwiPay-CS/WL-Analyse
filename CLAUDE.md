@@ -249,8 +249,23 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - Fälle und Vorlagen (Stand 2026-08-23): ZWEI getrennte Ebenen, nie vermischt.
   * Vorlage = wiederverwendbares Preisblatt OHNE Kundenbezug
     (config/profiles/<name>.json, git-versioniert). Art = standard | verband |
-    rahmenvertrag, plus Notiz und updated_at. Anwenden/Sichern/Löschen im Tab
-    «ASF & DCC». Hier gehört die echte SwiPay-Preisliste hin.
+    rahmenvertrag, plus Notiz und updated_at. Im Tab «ASF & DCC»: Anwenden ·
+    Überschreiben · Bearbeiten · Löschen, dazu «als neue Vorlage sichern».
+    Hier gehört die echte SwiPay-Preisliste hin.
+    - Überschreiben = aktuelle Konditionen IN die gewählte Vorlage speichern,
+      Name/Art/Notiz bleiben (save_template überschreibt gleichnamig).
+      Bearbeiten = nur Name/Art/Notiz, Sätze bleiben unangetastet
+      (settings.update_template_meta). Beide zeigen erst die Konsequenz:
+      Überschreiben eine Änderungsliste, Löschen eine Warnung. Grund: die
+      Sätze sind von Hand aus einem Preisblatt getippt, und anders als ein
+      Fall hat eine Vorlage KEINEN Autosave.
+    - Umbenennen auf einen existierenden Namen wird abgelehnt, nicht
+      zusammengeführt. «Als neue Vorlage speichern» mit vorhandenem Namen
+      ebenso — dafür ist Überschreiben da, damit nichts still ersetzt wird.
+    - Vorlagen-Namen werden zu Dateinamen: _check_template_name() weist «/»,
+      «\» und führende Punkte ab.
+    - Der Konditionen-Vergleich ist EINE Funktion (_kondition_diff in app.py),
+      genutzt von der Fall-Änderungsliste und vom Überschreiben-Dialog.
   * Fall = eine Kundensituation (data/cases/, gitignored). Der KUNDE ist der
     Ordnungsbegriff, darunter benannte Varianten («konservativ»,
     «aggressiv»), jede mit sichtbarem Datum der letzten Speicherung.

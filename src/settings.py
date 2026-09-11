@@ -296,6 +296,16 @@ class TemplateMeta:
         return TEMPLATE_ART_LABEL.get(self.art, self.art)
 
 
+def _check_template_name(name: str) -> str:
+    """A template name becomes a file name -- keep it inside the directory."""
+    clean = str(name).strip()
+    if not clean:
+        raise ValueError("Eine Vorlage braucht einen Namen.")
+    if clean.startswith(".") or any(c in clean for c in ("/", "\\", "\0")):
+        raise ValueError(f"Unzulässiger Vorlagen-Name: {name!r}")
+    return clean
+
+
 def save_template(
     profile: RateProfile,
     name: str,
@@ -303,11 +313,12 @@ def save_template(
     notiz: str = "",
     profiles_dir: str | Path = PROFILES_DIR,
 ) -> Path:
-    """Write a reusable price sheet. Overwrites a template of the same name."""
+    """Write a reusable price sheet. Overwrites a template of the same name --
+    that is the "save the current rates into this template" path, so the user
+    does not have to delete and re-create one."""
     if art not in TEMPLATE_ARTEN:
         raise ValueError(f"Unbekannte Vorlagen-Art: {art!r}; erlaubt: {TEMPLATE_ARTEN}")
-    if not str(name).strip():
-        raise ValueError("Eine Vorlage braucht einen Namen.")
+    name = _check_template_name(name)
     d = Path(profiles_dir)
     d.mkdir(parents=True, exist_ok=True)
     data = profile.to_json()
@@ -352,6 +363,44 @@ def list_templates(profiles_dir: str | Path = PROFILES_DIR) -> list[TemplateMeta
         ))
     order = {a: i for i, a in enumerate(TEMPLATE_ARTEN)}
     return sorted(out, key=lambda m: (order.get(m.art, 99), m.name.lower()))
+
+
+def update_template_meta(
+    name: str,
+    *,
+    art: str | None = None,
+    notiz: str | None = None,
+    new_name: str | None = None,
+    profiles_dir: str | Path = PROFILES_DIR,
+) -> Path:
+    """Edit a template's name, Art or Notiz WITHOUT touching its rates.
+
+    The rates are the expensive part -- they were typed by hand from a price
+    sheet. Renaming refuses to overwrite an existing template rather than
+    silently merging two of them.
+    """
+    d = Path(profiles_dir)
+    src = d / f"{_check_template_name(name)}.json"
+    if not src.exists():
+        raise ValueError(f"Vorlage «{name}» nicht gefunden.")
+    data = json.loads(src.read_text(encoding="utf-8"))
+
+    if art is not None:
+        if art not in TEMPLATE_ARTEN:
+            raise ValueError(f"Unbekannte Vorlagen-Art: {art!r}; erlaubt: {TEMPLATE_ARTEN}")
+        data["art"] = art
+    if notiz is not None:
+        data["notiz"] = str(notiz)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    target = d / f"{_check_template_name(new_name or name)}.json"
+    if target != src and target.exists():
+        raise ValueError(f"Es gibt bereits eine Vorlage «{target.stem}».")
+    target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                      encoding="utf-8")
+    if target != src:
+        src.unlink()
+    return target
 
 
 def delete_template(name: str, profiles_dir: str | Path = PROFILES_DIR) -> None:

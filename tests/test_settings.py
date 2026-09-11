@@ -193,3 +193,80 @@ def test_delete_template_is_idempotent(tmp_path):
     s.delete_template("weg", profiles_dir=tmp_path)
     s.delete_template("weg", profiles_dir=tmp_path)
     assert s.list_templates(tmp_path) == []
+
+
+def test_update_template_meta_keeps_the_rates(tmp_path):
+    # The rates are the expensive part -- typed by hand from a price sheet.
+    s.save_template(_tmpl_profile(), "Pool Alpin", "verband", "2025",
+                    profiles_dir=tmp_path)
+    s.update_template_meta("Pool Alpin", art="rahmenvertrag", notiz="2026",
+                           profiles_dir=tmp_path)
+    prof, meta = s.load_template("Pool Alpin", profiles_dir=tmp_path)
+    assert prof.type_rates["debit"].asf_pct == 0.0008
+    assert prof.type_rates["credit"].asf_pct == 0.0016
+    assert prof.dcc_pct == 0.0185
+    assert meta.art == "rahmenvertrag"
+    assert meta.notiz == "2026"
+
+
+def test_update_template_meta_renames_the_file(tmp_path):
+    s.save_template(_tmpl_profile(), "Alt", "standard", profiles_dir=tmp_path)
+    s.update_template_meta("Alt", new_name="Neu", profiles_dir=tmp_path)
+    assert not (tmp_path / "Alt.json").exists()
+    assert [m.name for m in s.list_templates(tmp_path)] == ["Neu"]
+    prof, _ = s.load_template("Neu", profiles_dir=tmp_path)
+    assert prof.type_rates["debit"].asf_pct == 0.0008
+
+
+def test_rename_refuses_to_swallow_an_existing_template(tmp_path):
+    import pytest
+    s.save_template(_tmpl_profile(), "Eins", "standard", profiles_dir=tmp_path)
+    s.save_template(_tmpl_profile(), "Zwei", "verband", profiles_dir=tmp_path)
+    with pytest.raises(ValueError):
+        s.update_template_meta("Eins", new_name="Zwei", profiles_dir=tmp_path)
+    # Both survive untouched.
+    assert sorted(m.name for m in s.list_templates(tmp_path)) == ["Eins", "Zwei"]
+    assert s.load_template("Zwei", profiles_dir=tmp_path)[1].art == "verband"
+
+
+def test_update_template_meta_touches_updated_at_and_validates(tmp_path):
+    import pytest
+    p = s.save_template(_tmpl_profile(), "X", "standard", profiles_dir=tmp_path)
+    before = s.load_template("X", profiles_dir=tmp_path)[1].updated_at
+    s.update_template_meta("X", notiz="neu", profiles_dir=tmp_path)
+    assert s.load_template("X", profiles_dir=tmp_path)[1].updated_at > before
+    with pytest.raises(ValueError):
+        s.update_template_meta("X", art="hausintern", profiles_dir=tmp_path)
+    with pytest.raises(ValueError):
+        s.update_template_meta("gibt-es-nicht", notiz="x", profiles_dir=tmp_path)
+    assert p.exists()
+
+
+def test_overwriting_a_template_replaces_only_the_rates(tmp_path):
+    # The "save the current conditions into this template" path.
+    s.save_template(_tmpl_profile(), "Pool Alpin", "verband", "2025",
+                    profiles_dir=tmp_path)
+    teurer = s.RateProfile(
+        dcc_pct=0.014,
+        type_rates={
+            "debit": s.TypeRate(0.0030, 0.01, 0.15),
+            "credit": s.TypeRate(0.0035, 0.01, 0.20),
+            "credit2": s.TypeRate(0.0050, 0.01, 0.25),
+        },
+    )
+    s.save_template(teurer, "Pool Alpin", "verband", "2025", profiles_dir=tmp_path)
+    prof, meta = s.load_template("Pool Alpin", profiles_dir=tmp_path)
+    assert prof.type_rates["debit"].asf_pct == 0.0030
+    assert (meta.art, meta.notiz) == ("verband", "2025")
+    assert len(s.list_templates(tmp_path)) == 1      # no second file
+
+
+def test_template_name_cannot_escape_the_directory(tmp_path):
+    import pytest
+    for bad in ("../boese", "a/b", ".versteckt"):
+        with pytest.raises(ValueError):
+            s.save_template(_tmpl_profile(), bad, "standard", profiles_dir=tmp_path)
+    s.save_template(_tmpl_profile(), "Gut", "standard", profiles_dir=tmp_path)
+    with pytest.raises(ValueError):
+        s.update_template_meta("Gut", new_name="../weg", profiles_dir=tmp_path)
+    assert [m.name for m in s.list_templates(tmp_path)] == ["Gut"]

@@ -47,6 +47,7 @@ from settings import (
     load_brand_master,
     load_template,
     prefill_brand_overrides,
+    update_template_meta,
     save_template,
 )
 
@@ -1299,6 +1300,152 @@ def _forget_kondition_widgets() -> None:
     st.session_state.pop("expert_editor", None)
 
 
+def _kondition_summary(p: RateProfile) -> str:
+    """Einzeiler, was ein Konditionen-Satz enthält. Damit lässt sich eine
+    Vorlage lesen, ohne sie anzuwenden — sonst müsste man die aktuellen
+    Konditionen überschreiben, nur um nachzusehen."""
+    rates = [p.type_rates[t] for t in OFFERABLE_TYPES if t in p.type_rates]
+    if not rates:
+        return "keine Sätze hinterlegt"
+
+    def _uniq(fmt) -> str:
+        vals = list(dict.fromkeys(fmt(r) for r in rates))
+        return vals[0] if len(vals) == 1 else " / ".join(vals)
+
+    return (f"ASF {' / '.join(f'{r.asf_pct * 100:.3f}' for r in rates)} % · "
+            f"Trx-Fee {_uniq(lambda r: f'{r.trx_fee * 100:.2f}')} Rp. · "
+            f"Mindestgeb. {_uniq(lambda r: f'{r.min_fee:.2f}')} CHF · "
+            f"DCC {p.dcc_pct * 100:.2f} %"
+            + (f" · {len(p.brand_overrides)} Brand-Werte"
+               if p.brand_overrides else ""))
+
+
+def _kondition_diff(old: RateProfile, new: RateProfile,
+                    col_old: str, col_new: str) -> list[dict]:
+    """Zeilenweiser Vergleich zweier Konditionen-Sätze, NUR die Unterschiede.
+
+    ui.pct() multipliziert selbst mit 100 — hier den Bruch übergeben, sonst
+    steht 140.00 % statt 1.40 % in der Änderungsliste.
+    """
+    rows = [{"Kondition": "DCC-Satz", col_old: pct(old.dcc_pct),
+             col_new: pct(new.dcc_pct)}]
+    for tkey in OFFERABLE_TYPES:
+        o, nw = old.type_rates.get(tkey), new.type_rates.get(tkey)
+        if not (o and nw):
+            continue
+        lbl = _TYPE_LABEL[tkey]
+        rows += [
+            {"Kondition": f"ASF {lbl}",
+             col_old: f"{o.asf_pct * 100:.3f} %", col_new: f"{nw.asf_pct * 100:.3f} %"},
+            {"Kondition": f"Trx-Fee {lbl}",
+             col_old: f"{o.trx_fee * 100:.2f} Rp.", col_new: f"{nw.trx_fee * 100:.2f} Rp."},
+            {"Kondition": f"Mindestgeb. {lbl}",
+             col_old: chf(o.min_fee), col_new: chf(nw.min_fee)},
+        ]
+    return [r for r in rows if r[col_old] != r[col_new]]
+
+
+def _template_meta(name: str):
+    """Metadaten einer Vorlage nachschlagen (None, wenn es sie nicht gibt)."""
+    for m in list_templates():
+        if m.name == name:
+            return m
+    return None
+
+
+def _render_template_panel() -> None:
+    """Überschreiben, Bearbeiten und Löschen einer Vorlage.
+
+    Jede der drei Aktionen zeigt erst ihre Konsequenz. Die Sätze einer Vorlage
+    sind von Hand aus einem Preisblatt getippt — sie still zu ersetzen wäre
+    teuer, und anders als ein Fall hat eine Vorlage keinen Autosave.
+    """
+    pend = st.session_state.get("tmpl_pending")
+    if not pend:
+        return
+    name, mode = pend["name"], pend["mode"]
+
+    def _close() -> None:
+        # tmpl_pick muss mit weg: nach Umbenennen oder Löschen zeigt der Key
+        # auf ein Label, das es nicht mehr gibt -- die Selectbox bricht dann.
+        for k in ("tmpl_pending", "tmpl_pick", "tmpl_e_name", "tmpl_e_art",
+                  "tmpl_e_notiz"):
+            st.session_state.pop(k, None)
+
+    if mode == "overwrite":
+        ui.section(f"Konditionen in «{name}» speichern",
+                   "Name, Art und Notiz bleiben unverändert.")
+        meta = _template_meta(name)
+        try:
+            old, _ = load_template(name)
+        except Exception as exc:
+            st.error(f"Vorlage nicht lesbar: {exc}")
+            if st.button("Schliessen", key="tmpl_p_close"):
+                _close()
+                st.rerun()
+            return
+        rows = _kondition_diff(old, profile, "In der Vorlage", "Neu")
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True,
+                         use_container_width=True)
+        else:
+            st.caption("Identisch — es gäbe nichts zu speichern.")
+        c1, c2 = st.columns([1, 3])
+        if c1.button("Speichern", type="primary", key="tmpl_p_save",
+                     disabled=not rows):
+            try:
+                save_template(profile, name,
+                              meta.art if meta else "standard",
+                              meta.notiz if meta else "")
+                _close()
+                st.session_state["tmpl_flash"] = f"«{name}» aktualisiert."
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Konnte nicht speichern: {exc}")
+        if c2.button("Abbrechen", key="tmpl_p_cancel"):
+            _close()
+            st.rerun()
+
+    elif mode == "meta":
+        ui.section(f"Vorlage «{name}» bearbeiten",
+                   "Nur Name, Art und Notiz — die Sätze bleiben unangetastet.")
+        e1, e2 = st.columns(2)
+        _nn = e1.text_input("Name", value=name, key="tmpl_e_name")
+        _na = e2.selectbox("Art", TEMPLATE_ARTEN, key="tmpl_e_art",
+                           index=TEMPLATE_ARTEN.index(pend.get("art", "standard")),
+                           format_func=lambda a: TEMPLATE_ART_LABEL[a])
+        _nz = st.text_input("Notiz (optional)", value=pend.get("notiz", ""),
+                            key="tmpl_e_notiz")
+        c1, c2 = st.columns([1, 3])
+        if c1.button("Speichern", type="primary", key="tmpl_p_meta"):
+            try:
+                update_template_meta(name, art=_na, notiz=_nz.strip(),
+                                     new_name=_nn.strip())
+                _close()
+                st.session_state["tmpl_flash"] = f"«{_nn.strip()}» gespeichert."
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Konnte nicht speichern: {exc}")
+        if c2.button("Abbrechen", key="tmpl_p_mcancel"):
+            _close()
+            st.rerun()
+
+    elif mode == "delete":
+        ui.section(f"Vorlage «{name}» löschen")
+        st.warning("Die hinterlegten Sätze gehen verloren. Eine Vorlage hat "
+                   "keinen Autosave — willst du sie nur ändern, nimm "
+                   "«Überschreiben» oder «Bearbeiten».")
+        c1, c2 = st.columns([1, 3])
+        if c1.button("Endgültig löschen", type="primary", key="tmpl_p_del"):
+            delete_template(name)
+            _close()
+            st.session_state["tmpl_flash"] = f"«{name}» gelöscht."
+            st.rerun()
+        if c2.button("Abbrechen", key="tmpl_p_dcancel"):
+            _close()
+            st.rerun()
+
+
 def _current_payload(variant_name: str, note: str = "") -> dict:
     """Der aktuelle Arbeitsstand als Fall-Payload."""
     basis = (st.session_state.get("applied_vorlage")
@@ -1399,22 +1546,8 @@ def _render_case_panel() -> None:
                    + ". Deren Hochrechnung bleibt ohne Wirkung.")
 
     # 3) Konditionen
-    old, new = profile, cases.profile_from_payload(payload)
-    # ui.pct() multipliziert selbst mit 100 -- den Bruch übergeben, nicht das
-    # Prozent, sonst steht 140.00 % statt 1.40 % in der Änderungsliste.
-    krows = [{"Kondition": "DCC-Satz", "Aktuell": pct(old.dcc_pct),
-              "Fall": pct(new.dcc_pct)}]
-    for tkey in OFFERABLE_TYPES:
-        o, nw = old.type_rates.get(tkey), new.type_rates.get(tkey)
-        if o and nw:
-            krows += [
-                {"Kondition": f"ASF {_TYPE_LABEL[tkey]}",
-                 "Aktuell": f"{o.asf_pct*100:.3f} %", "Fall": f"{nw.asf_pct*100:.3f} %"},
-                {"Kondition": f"Trx-Fee {_TYPE_LABEL[tkey]}",
-                 "Aktuell": f"{o.trx_fee*100:.2f} Rp.", "Fall": f"{nw.trx_fee*100:.2f} Rp."},
-                {"Kondition": f"Mindestgeb. {_TYPE_LABEL[tkey]}",
-                 "Aktuell": chf(o.min_fee), "Fall": chf(nw.min_fee)}]
-    changed = [r for r in krows if r["Aktuell"] != r["Fall"]]
+    changed = _kondition_diff(profile, cases.profile_from_payload(payload),
+                              "Aktuell", "Fall")
     st.markdown("**Konditionen**")
     if changed:
         st.dataframe(pd.DataFrame(changed), hide_index=True, use_container_width=True)
@@ -1655,10 +1788,13 @@ def page_einstellungen() -> None:
         # Wiederverwendbares Preisblatt OHNE Kundenbezug (config/profiles/,
         # git-versioniert) — im Gegensatz zum Fall (data/cases/, gitignored).
         ui.section("Vorlagen", "Standard · Verband · Rahmenvertrag")
+        _tflash = st.session_state.pop("tmpl_flash", None)
+        if _tflash:
+            st.success(_tflash)
         _tmpls = list_templates()
         v1, v2 = st.columns(2)
         with v1:
-            st.markdown("**Vorlage anwenden**")
+            st.markdown("**Vorlage anwenden oder pflegen**")
             if not _tmpls:
                 st.caption("Noch keine Vorlage hinterlegt. Rechts die aktuellen "
                            "Konditionen sichern — dann steht hier das echte "
@@ -1669,36 +1805,65 @@ def page_einstellungen() -> None:
                 _meta = _lbl[_sel]
                 st.caption((_meta.notiz + " · " if _meta.notiz else "")
                            + f"geändert {_fmt_when(_meta.updated_at)}")
-                t1, t2 = st.columns([1, 1])
-                if t1.button("Anwenden", key="tmpl_apply"):
-                    try:
-                        _prof, _m = load_template(_meta.name)
-                        st.session_state.profile = _prof
-                        session_store.save_profile(_prof)
-                        _forget_kondition_widgets()
-                        st.session_state["applied_vorlage"] = {
-                            "name": _m.name, "art": _m.art}
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Vorlage nicht ladbar: {exc}")
-                if t2.button("Löschen", key="tmpl_del"):
-                    delete_template(_meta.name)
-                    st.session_state.pop("tmpl_pick", None)
+                # Inhalt zeigen, ohne sie anwenden zu müssen — sonst muss man
+                # die Konditionen überschreiben, nur um nachzusehen.
+                try:
+                    _tprof, _ = load_template(_meta.name)
+                    st.caption(_kondition_summary(_tprof))
+                except Exception as exc:
+                    _tprof = None
+                    st.error(f"Vorlage nicht lesbar: {exc}")
+
+                t1, t2 = st.columns(2)
+                if t1.button("Anwenden", key="tmpl_apply", disabled=_tprof is None):
+                    st.session_state.profile = _tprof
+                    session_store.save_profile(_tprof)
+                    _forget_kondition_widgets()
+                    st.session_state["applied_vorlage"] = {
+                        "name": _meta.name, "art": _meta.art}
+                    st.rerun()
+                if t2.button("Überschreiben", key="tmpl_over",
+                             disabled=_tprof is None,
+                             help="Die aktuellen Konditionen in diese Vorlage "
+                                  "speichern — Name, Art und Notiz bleiben."):
+                    st.session_state["tmpl_pending"] = {
+                        "mode": "overwrite", "name": _meta.name}
+                    st.rerun()
+                t3, t4 = st.columns(2)
+                if t3.button("Bearbeiten", key="tmpl_edit",
+                             help="Name, Art und Notiz ändern — die Sätze "
+                                  "bleiben unangetastet."):
+                    st.session_state["tmpl_pending"] = {
+                        "mode": "meta", "name": _meta.name,
+                        "art": _meta.art, "notiz": _meta.notiz}
+                    st.rerun()
+                if t4.button("Löschen", key="tmpl_del"):
+                    st.session_state["tmpl_pending"] = {
+                        "mode": "delete", "name": _meta.name}
                     st.rerun()
         with v2:
-            st.markdown("**Aktuelle Konditionen als Vorlage sichern**")
+            st.markdown("**Aktuelle Konditionen als neue Vorlage sichern**")
+            st.caption(_kondition_summary(profile))
             _tn = st.text_input("Name", key="tmpl_name",
                                 placeholder="z. B. SwiPay Standard 2026")
             _ta = st.selectbox("Art", TEMPLATE_ARTEN, key="tmpl_art",
                                format_func=lambda a: TEMPLATE_ART_LABEL[a])
             _tz = st.text_input("Notiz (optional)", key="tmpl_notiz")
-            if st.button("Als Vorlage speichern", key="tmpl_save"):
+            if st.button("Als neue Vorlage speichern", key="tmpl_save"):
                 try:
-                    _p = save_template(profile, _tn.strip(), _ta, _tz.strip())
-                    st.success(f"Vorlage gespeichert: {_p.name}")
+                    _name = str(_tn).strip()
+                    if any(m.name.lower() == _name.lower() for m in _tmpls):
+                        raise ValueError(
+                            f"«{_name}» gibt es schon — links auswählen und "
+                            "«Überschreiben» nehmen, damit nichts still ersetzt "
+                            "wird.")
+                    _p = save_template(profile, _name, _ta, _tz.strip())
+                    st.success(f"Vorlage gespeichert: {_p.stem}")
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Konnte nicht speichern: {exc}")
+
+        _render_template_panel()
 
         st.session_state.profile = profile
         session_store.save_profile(profile)
