@@ -21,6 +21,7 @@ import streamlit as st
 import ui
 import session_store
 import case_store as cases
+import filters
 import hochrechnung_store as hoch_store
 from pipeline import run_comparison, totals as engine_totals
 from ingest import ingest_files, init_db
@@ -779,79 +780,124 @@ _BRAND_ICON = {"Visa": "VISA", "VisaDebit": "VISA", "Mastercard": "MC",
 
 
 def page_transaktionen() -> None:
-    ui.page_header("Transaktionen", "Filtern, prüfen, veranschaulichen.",
-                   status="Live", meta="Detailansicht je Transaktion")
+    ui.page_header("Transaktionen", "Filtern, Monatsverlauf und Verteilung prüfen.",
+                   status="Live", meta="Umsatz pro Monat · Verteilung")
     months = _months(df)
 
-    with st.expander("Filter", expanded=True):
-        c1, c2, c3 = st.columns(3)
-        def ms(label, col, c):
-            if col not in df.columns:
-                return None
-            opts = sorted(df[col].dropna().astype(str).unique().tolist())
-            return c.multiselect(label, opts, default=opts)
-        sel_brand = ms("Brand", "brand", c1)
-        sel_cat   = ms("Kategorie", "category", c2)
-        sel_reg   = ms("Clearing Region", "region", c3)
-        frm = to = None
-        if len(months) >= 2:
-            frm, to = st.select_slider("Zeitraum", options=months,
-                                       value=(months[0], months[-1]))
-        elif months:
-            frm = to = months[0]
+    # Zweispaltig wie das Etrax-Dashboard: Filter links als Panel, Auswertung
+    # rechts. Der Filter gilt NUR für diese Seite -- die Präsentation wählt
+    # Partner und Gruppen für die Hochrechnung aus, ein Brand- oder
+    # Terminal-Filter dort würde Kennzahlen und Kunden-PDF still verfälschen.
+    fcol, mcol = st.columns([1, 3], gap="large")
 
-    mask = _apply_period(df, frm, to)
-    for col, sel in [("brand", sel_brand), ("category", sel_cat), ("region", sel_reg)]:
-        if sel is not None and col in df.columns:
-            mask &= df[col].astype(str).isin(sel)
-    fdf = df[mask].reset_index(drop=True)
-    if fdf.empty:
-        ui.info_banner("Keine Transaktionen für diese Auswahl.")
-        return
+    with fcol:
+        with st.container(key="trx_filter"):
+            st.markdown("**Filter & Zeitraum**")
 
-    comp = run_comparison(fdf, params, offer, profile.dcc_pct)
-    t = engine_totals(comp)
-    d = _derive(fdf, comp, t)
-    ui.kpi_row([
-        {"label": "Transaktionen", "value": num(d["n_txn"]), "accent": ui.CYAN},
-        {"label": "Bruttoumsatz", "value": f"CHF {chf_c(d['brutto'])}", "accent": ui.BLUE},
-        {"label": "Ø Ticket", "value": f"CHF {chf(d['avg_ticket'])}", "accent": ui.CYAN},
-        {"label": "Ersparnis", "value": f"CHF {chf(d['diff'])}",
-         "accent": ui.GREEN if d["diff"] >= 0 else ui.ROT},
-    ])
+            # Alle Widget-Keys tragen eine Generation. «Zurücksetzen» zählt sie
+            # hoch, wodurch die Widgets neue Identitäten bekommen und leer
+            # starten. Nur den session_state-Schlüssel zu löschen genügt NICHT:
+            # das Frontend schickt seinen alten Wert zurück, und dann zeigt das
+            # Feld «Visa», während die Kennzahlen ungefiltert rechnen.
+            _gen = st.session_state.get("trx_gen", 0)
+            _rk = f"trx_range_{_gen}"
 
-    ui.section("Letzte Transaktionen", f"{num(min(len(fdf), 200))} von {num(len(fdf))}")
-    show = fdf.copy()
-    show["wl"] = comp["wl_net"].values
-    show["sp"] = comp["sp_net"].values
-    cols = [c for c in ["datum", "zeit", "brand", "category", "terminal_id",
-                        "region", "brutto", "wl", "sp"] if c in show.columns]
-    disp = show[cols].head(200).rename(columns={
-        "datum": "Datum", "zeit": "Zeit", "brand": "Brand", "category": "Kategorie",
-        "terminal_id": "Terminal", "region": "Region", "brutto": "Betrag",
-        "wl": "WL-Geb.", "sp": "SP-Geb."})
-    if "Datum" in disp:
-        disp["Datum"] = _to_datetime(disp["Datum"]).dt.strftime("%d.%m.%Y")
-    if "Zeit" in disp:
-        secs = pd.to_numeric(disp["Zeit"], errors="coerce") * 86400
-        disp["Zeit"] = secs.apply(
-            lambda x: f"{int(x // 3600):02d}:{int((x % 3600) // 60):02d}"
-            if pd.notna(x) else "")
-    for c in ["Betrag", "WL-Geb.", "SP-Geb."]:
-        if c in disp:
-            disp[c] = disp[c].apply(lambda x: chf(float(x)) if pd.notna(x) else "")
-    st.dataframe(disp, use_container_width=True, hide_index=True)
+            # Ein gespeicherter Bereich kann nach einem Exportwechsel auf
+            # Monate zeigen, die es nicht mehr gibt -- der Schieber bricht
+            # dann. Vorher prüfen statt hinterher abfangen.
+            _saved = st.session_state.get(_rk)
+            if _saved and (len(months) < 2 or _saved[0] not in months
+                           or _saved[1] not in months):
+                st.session_state.pop(_rk, None)
 
-    ui.section("Verteilung")
-    a, b = st.columns(2)
-    with a:
-        h = _hist(fdf)
-        if not h.empty:
-            st.altair_chart(ui.chart_hist(h), use_container_width=True)
-    with b:
-        r = _region(fdf)
-        if not r.empty:
-            st.altair_chart(ui.chart_region(r), use_container_width=True)
+            def _set_range(rng) -> None:
+                if rng:
+                    st.session_state[_rk] = rng
+
+            st.caption("Zeitraum")
+            # Jahres-Schnellwahl als Knöpfe, nicht als st.pills: die Chips
+            # sähen hübscher aus, lassen sich aber nicht automatisiert prüfen.
+            # «Gesamt» auf eigener Zeile, damit in der schmalen Filterspalte
+            # kein Label umbricht.
+            if st.button("Gesamt", key="trx_y_all", use_container_width=True):
+                if months:
+                    _set_range((months[0], months[-1]))
+                st.rerun()
+            _years = filters.years_from_months(months)[:4]
+            if _years:
+                _yc = st.columns(len(_years))
+                for _i, _y in enumerate(_years):
+                    if _yc[_i].button(_y, key=f"trx_y_{_y}",
+                                      use_container_width=True):
+                        _set_range(filters.year_range(_y, months))
+                        st.rerun()
+
+            frm = to = None
+            if len(months) >= 2:
+                st.session_state.setdefault(_rk, (months[0], months[-1]))
+                frm, to = st.select_slider(
+                    "Monate", options=months, key=_rk,
+                    label_visibility="collapsed")
+            elif months:
+                frm = to = months[0]
+
+            # Leere Auswahl heisst «Alle» und filtert nicht (siehe filters.py).
+            sel: dict[str, list[str]] = {}
+            for _key, _col, _label in filters.TRX_FIELDS:
+                _opts = filters.options_for(df, _col)
+                sel[_key] = st.multiselect(_label, _opts, default=[],
+                                           placeholder="Alle",
+                                           key=f"trx_f_{_key}_{_gen}",
+                                           disabled=not _opts)
+
+            if st.button("Filter zurücksetzen", key="trx_reset",
+                         use_container_width=True):
+                for _k in [k for k in st.session_state if isinstance(k, str)
+                           and (k.startswith("trx_f_") or k.startswith("trx_range_"))]:
+                    st.session_state.pop(_k, None)
+                st.session_state["trx_gen"] = _gen + 1
+                st.rerun()
+
+    fdf = df[filters.apply_filters(df, sel, frm, to)].reset_index(drop=True)
+
+    with mcol:
+        if fdf.empty:
+            ui.info_banner("Keine Transaktionen für diese Auswahl.")
+            return
+
+        comp = run_comparison(fdf, params, offer, profile.dcc_pct)
+        t = engine_totals(comp)
+        d = _derive(fdf, comp, t)
+        ui.kpi_row([
+            {"label": "Transaktionen", "value": num(d["n_txn"]), "accent": ui.CYAN},
+            {"label": "Bruttoumsatz", "value": f"CHF {chf_c(d['brutto'])}", "accent": ui.BLUE},
+            {"label": "Ø Ticket", "value": f"CHF {chf(d['avg_ticket'])}", "accent": ui.CYAN},
+            {"label": "Ersparnis", "value": f"CHF {chf(d['diff'])}",
+             "accent": ui.GREEN if d["diff"] >= 0 else ui.ROT},
+        ])
+
+        # Bruttoumsatz der Käufe, dieselbe Definition wie auf der Präsentation
+        # (_monthly setzt Refunds auf 0) -- ein Monat mit vielen Gutschriften
+        # wird sonst optisch kleiner, als er an Geschäft war.
+        ui.section("Umsatz pro Monat", "Bruttoumsatz der Käufe · immer Ist-Werte")
+        mdf = _monthly(fdf, comp)
+        if mdf.empty:
+            st.caption("Kein Datum in den Daten — kein Monatsverlauf möglich.")
+        else:
+            st.altair_chart(ui.chart_volume_monthly(mdf[["Monat", "Umsatz"]],
+                                                    height=280),
+                            use_container_width=True)
+
+        ui.section("Verteilung")
+        a, b = st.columns(2)
+        with a:
+            h = _hist(fdf)
+            if not h.empty:
+                st.altair_chart(ui.chart_hist(h), use_container_width=True)
+        with b:
+            r = _region(fdf)
+            if not r.empty:
+                st.altair_chart(ui.chart_region(r), use_container_width=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════

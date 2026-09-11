@@ -310,6 +310,33 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - Tool-Version steht in src/version.py (TOOL_VERSION, Format aus dem Abschnitt
   «Versionierung»). Sie erscheint in der Sidebar und in JEDER Fall-Datei —
   eine Datei muss sagen können, womit sie entstanden ist.
+- Seite Transaktionen (Stand 2026-09-11): zweispaltig nach Vorbild des
+  Etrax-Dashboards (swipay_etrax_disago_dashboard_v3-1_defr.html, Ansicht
+  «Auswertung → Filter & Zeitraum»). Links ein Filter-Panel, rechts Kennzahlen,
+  Monatsverlauf und Verteilung. Die Tabelle «Letzte Transaktionen» ist ENTFERNT
+  — Einzelzeilen gibt es weiterhin über den Detail-CSV-Export der Präsentation.
+  * Filterlogik in src/filters.py, Streamlit-frei und getestet. LEERE AUSWAHL
+    HEISST «ALLE» und filtert nicht (vorher waren alle Optionen vorausgewählt).
+    Mehrere Werte in einem Feld sind ODER, mehrere Felder UND.
+  * Feld-Mapping Etrax → Worldline: VP-Name → partner_name, Terminal-ID →
+    terminal_id, Vertriebsweg → vertrag, Herkunftsland → region, Brand → brand,
+    Kartentypen → category. IBAN hat keine Entsprechung und fehlt bewusst.
+  * Der Filter gilt NUR für diese Seite. Die Präsentation wählt Partner und
+    Gruppen für die Hochrechnung aus; ein Brand- oder Terminal-Filter dort
+    würde Kennzahlen und Kunden-PDF still verfälschen.
+  * Jahres-Schnellwahl klemmt auf die vorhandenen Monate (filters.year_range):
+    ein rollender Zwölfmonats-Export hat keinen Januar, 2025-01..2025-12 wäre
+    eine leere Seite ohne Erklärung.
+  * Der Monats-Chart zeigt den Bruttoumsatz der KÄUFE (wie _monthly, Refunds
+    auf 0) — dieselbe Definition wie auf der Präsentation.
+  * Widget-Keys tragen eine Generation (trx_gen). «Filter zurücksetzen» zählt
+    sie hoch, statt nur die session_state-Schlüssel zu löschen: sonst schickt
+    das Frontend seinen alten Wert zurück, das Feld zeigt weiter «Visa» und die
+    Kennzahlen rechnen ungefiltert. Zweite Streamlit-Falle dieser Art, siehe
+    auch _forget_kondition_widgets.
+  * Jahres-Schnellwahl als st.button, nicht st.pills: die Chips sähen besser
+    aus, reagieren aber auf keine automatisierte Eingabe und wären damit nicht
+    prüfbar.
 - Fixkosten und IC-Cap-Feinlogik = Phase 6, optional, nur bei konkretem Bedarf.
 
 ## Harter Validierungs-Anker (Davos-Datensatz)

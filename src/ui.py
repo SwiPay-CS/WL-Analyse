@@ -441,16 +441,22 @@ def chart_monthly(df: pd.DataFrame) -> alt.Chart:
     return _base(line, height=240)
 
 
-def chart_volume_monthly(df: pd.DataFrame) -> alt.Chart:
-    """df columns: Monat, Umsatz."""
+def chart_volume_monthly(df: pd.DataFrame, height: int = 200) -> alt.Chart:
+    """df columns: Monat, Umsatz.
+
+    height is a parameter because the same chart sits in a narrow side column
+    on the Präsentation and fills the main column on Transaktionen.
+    """
     bars = (
         alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=BLUE, opacity=0.85)
         .encode(
             x=alt.X("Monat:N", title=None),
             y=alt.Y("Umsatz:Q", axis=_chf_axis("Umsatz CHF")),
+            tooltip=[alt.Tooltip("Monat:N", title="Monat"),
+                     alt.Tooltip("Umsatz:Q", title="Umsatz CHF", format=",.2f")],
         )
     )
-    return _base(bars, height=200)
+    return _base(bars, height=height)
 
 
 def chart_hist(df: pd.DataFrame) -> alt.Chart:
@@ -630,6 +636,18 @@ def inject_css() -> None:
     /* Undo the red/pinned rule for the nested Merchants sub-tabs (Gruppieren /
        Hochrechnung) — they inherit the .st-key-settings_tabs ancestor match
        but "Hochrechnung" is not a reset action. */
+    /* Filterspalte auf der Seite Transaktionen: als Panel absetzen und beim
+       Scrollen oben halten, damit die Filter neben den Charts stehen bleiben. */
+    .st-key-trx_filter {{
+        background: {WHITE};
+        border: 1px solid {LINE};
+        border-radius: 10px;
+        padding: 14px 16px 6px;
+        position: sticky;
+        top: 0.5rem;
+    }}
+    .st-key-trx_filter [data-testid="stVerticalBlock"] {{ gap: .55rem; }}
+
     .st-key-merchant_subtabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type {{
       margin-left:0; background:{WHITE}; color:var(--anthrazit); border-color:var(--line); }}
     .st-key-merchant_subtabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:last-of-type:hover {{
