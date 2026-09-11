@@ -14,6 +14,12 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   (früher unter ~/Documents/Claude/…; Documents wurde auf «Dokumente» lokalisiert)
 - Start: cd "/Users/schellmo/Dokumente/Claude/Analysen/Prototyp" && uv run streamlit run app.py
   (öffnet http://localhost:8501; nur EINE Instanz, nie eine zweite auf anderem Port)
+- Für den Alltag: Doppelklick auf «Start SwiPay Tool.command». Der Starter
+  öffnet den Browser-Tab selbst, sobald der Health-Endpunkt antwortet —
+  Streamlit tut es nicht, weil .streamlit/config.toml headless = true setzt
+  (sonst würde der Browser-Pane der Entwicklungsumgebung ein Fenster
+  aufreissen). Sofort zu öffnen landete auf einer Fehlerseite, der Start
+  dauert ein paar Sekunden. Läuft schon etwas auf 8501, öffnet er nur den Tab.
 - Tests: uv run pytest
 - Nach einem Ordner-Umzug ist die .venv verbogen (hartkodierte Pfade → «Failed to
   spawn: streamlit»). Fix: rm -rf .venv && uv sync.
