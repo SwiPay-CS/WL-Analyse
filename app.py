@@ -1346,6 +1346,21 @@ def _forget_kondition_widgets() -> None:
     st.session_state.pop("expert_editor", None)
 
 
+def _forget_hochrechnung_widgets() -> None:
+    """Widget-Keys der Hochrechnung vergessen.
+
+    Pflicht nach jedem programmatischen Schreiben in hochrechnung_store (Fall-
+    Import, Reset): die Zahlenfelder unter Einstellungen → Merchants →
+    Hochrechnung seeden sich in _volume_input() nur beim ERSTEN Auftreten
+    ihres Keys aus dem Default — sonst gewinnt der alte session_state-Wert und
+    das Geladene bleibt unsichtbar, bis ein Browser-Reload session_state leert.
+    """
+    for _k in [k for k in st.session_state
+               if isinstance(k, str) and (k.startswith("hoch_vol_")
+                                          or k.startswith("hoch_open_"))]:
+        st.session_state.pop(_k, None)
+
+
 def _kondition_summary(p: RateProfile) -> str:
     """Einzeiler, was ein Konditionen-Satz enthält. Damit lässt sich eine
     Vorlage lesen, ohne sie anzuwenden — sonst müsste man die aktuellen
@@ -1528,6 +1543,7 @@ def _apply_case(payload: dict, new_brands: list[str], kunde_slug: str,
                           auswahl=st.session_state.get("auswahl_snapshot"))
 
     cases.apply_merchants(DB_PATH, payload)
+    _forget_hochrechnung_widgets()
 
     st.session_state.profile = cases.profile_from_payload(payload)
     session_store.save_profile(st.session_state.profile)
@@ -2304,10 +2320,7 @@ def page_einstellungen() -> None:
             st.session_state.pop("dcc_in", None)
             st.session_state.pop("active_case", None)
             st.session_state.pop("last_pdf", None)
-            for _k in [k for k in st.session_state
-                       if isinstance(k, str) and (k.startswith("hoch_vol_")
-                                                  or k.startswith("hoch_open_"))]:
-                st.session_state.pop(_k, None)
+            _forget_hochrechnung_widgets()
             st.success("Zurückgesetzt. Lade einen neuen Export, um weiterzuarbeiten.")
             st.rerun()
 
