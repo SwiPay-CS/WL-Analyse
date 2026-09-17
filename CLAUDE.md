@@ -249,9 +249,20 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
   Die Kachel «DCC-Vorteil bei 100 %» wurde 2026-08-22 auf Nutzer-Entscheid
   entfernt (als hypothetischer Wert nicht relevant genug), zusammen mit dem
   erklärenden Absatz dazu. Damit fehlt der Seite der Hinweis, dass Worldline
-  bei höherer Ausschöpfung ebenfalls mehr Cashback zahlt — das «unrealisierte
-  Cashback» ist also NICHT der Zusatzvorteil eines Wechsels. Im Kundentermin
-  mündlich einordnen; nicht unkommentiert als Vorteil verkaufen.
+  bei höherer Ausschöpfung ebenfalls mehr Cashback zahlt — das gilt sinngemäss
+  weiter, auch wenn die Kachel dafür 2026-09-17 gewechselt hat (siehe unten):
+  im Kundentermin mündlich einordnen, nicht unkommentiert als Vorteil
+  verkaufen.
+  Die vierte DCC-Kachel («Unrealisiertes Cashback», Obergrenze minus
+  sp_cashback) wurde 2026-09-17 auf Nutzer-Wunsch durch «Cashback Worldline»
+  ersetzt: zeigt wl_cb (effektiver WL-Cashback) und darunter den daraus
+  errechneten Satz wl_cb / dcc_vol_purch — dieselbe Kauf-Basis wie die
+  SwiPay-Kachel daneben, sonst wären Zähler und Nenner nicht vergleichbar
+  (derselbe Fehler, den die SwiPay-Rate schon einmal gemacht hätte, siehe
+  volume_bases() oben). Grund: die alte Kachel zeigte nur die Aufholstrecke
+  zur theoretischen Obergrenze und liess implizit offen, dass Worldline auf
+  dem TATSÄCHLICH genutzten DCC-Volumen schon heute zahlt — das steht jetzt
+  direkt da, statt nur mündlich eingeordnet zu werden.
 - Fälle und Vorlagen (Stand 2026-08-23): ZWEI getrennte Ebenen, nie vermischt.
   * Vorlage = wiederverwendbares Preisblatt OHNE Kundenbezug
     (config/profiles/<name>.json, git-versioniert). Art = standard | verband |
@@ -340,6 +351,19 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
     das Frontend seinen alten Wert zurück, das Feld zeigt weiter «Visa» und die
     Kennzahlen rechnen ungefiltert. Zweite Streamlit-Falle dieser Art, siehe
     auch _forget_kondition_widgets.
+  * Dritte Variante derselben Fallenklasse, 2026-09-17 in _volume_input()
+    (Jahresumsatz-Feld, Einstellungen → Merchants → Hochrechnung) gefunden:
+    das Feld leerte sich, sobald man die Seite wechselte und zurückkam,
+    obwohl der Wert im Hintergrund weiter korrekt verwendet wurde. Ursache:
+    __num (Zahlenwert) ist ein gewöhnlicher session_state-Eintrag und
+    überlebt jeden Rerun; __txt (Anzeigetext) ist ein ECHTER Widget-Key, den
+    Streamlit aufräumt, sobald das Widget in einem Run nicht gezeichnet wird
+    (z. B. auf einer anderen Seite). __txt wurde nur geseedet, solange __num
+    fehlte — also einmal pro Session — und blieb danach leer, weil __num ja
+    noch da war. Fix: __num und __txt unabhängig voneinander seeden, __txt
+    jedes Mal neu aus __num befüllen, wenn es fehlt. Anders als bei trx_gen
+    verschwindet hier nicht der ganze Key, nur einer von zweien — deshalb
+    schwerer zu finden.
   * Jahres-Schnellwahl als st.button, nicht st.pills: die Chips sähen besser
     aus, reagieren aber auf keine automatisierte Eingabe und wären damit nicht
     prüfbar.
