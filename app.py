@@ -972,11 +972,21 @@ def _volume_input(container, key: str, default: float, *,
     Der Zahlenwert lebt in <key>__num, der Text im Widget-Key <key>__txt. Bei
     unlesbarer Eingabe bleibt der letzte gueltige Wert stehen und es gibt einen
     sichtbaren Hinweis -- keine stille 0.
+
+    Die beiden Keys werden UNABHAENGIG voneinander geseedet: num_key ist ein
+    gewoehnlicher session_state-Eintrag und ueberlebt jeden Rerun, txt_key
+    dagegen ist ein Widget-Key -- Streamlit raeumt den auf, sobald das Widget
+    in einem Run nicht instanziiert wird (z. B. weil man auf eine andere Seite
+    wechselt). Haengte man txt_key nur an "num_key not in session_state", blieb
+    das Feld nach der Rueckkehr leer: num_key existierte noch, aber txt_key war
+    von Streamlit bereits geloescht und wurde nie neu aus num_key befuellt --
+    obwohl der Wert (und die Hochrechnung damit) im Hintergrund weiter stimmte.
     """
     txt_key, num_key, err_key = f"{key}__txt", f"{key}__num", f"{key}__err"
     if num_key not in st.session_state:
         st.session_state[num_key] = float(default)
-        st.session_state[txt_key] = _fmt_vol(default)
+    if txt_key not in st.session_state:
+        st.session_state[txt_key] = _fmt_vol(st.session_state[num_key])
 
     def _sync() -> None:
         parsed = ui.parse_chf(st.session_state[txt_key])
