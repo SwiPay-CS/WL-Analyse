@@ -653,7 +653,10 @@ def page_praesentation() -> None:
     # sp_cashback / dcc_volumen 1.8518 % statt der eingestellten 1.85 % --
     # Zaehler und Nenner sassen auf verschiedenen Basen.
     cb_max = v.cashback_ceiling(profile.dcc_pct)
-    cb_head = cb_max - v.sp_cb
+    # WL-Satz effektiv auf derselben Basis wie sp_cb (dcc_vol_purch, nicht die
+    # Ceiling-Basis fx_vol_purch) -- sonst waeren Zaehler und Nenner nicht
+    # vergleichbar (gleicher Fehler wie bei der SwiPay-Rate weiter oben).
+    wl_rate = (v.wl_cb / v.dcc_vol_purch) if v.dcc_vol_purch else None
     a, b = st.columns([1, 1.35])
     with a:
         st.altair_chart(ui.chart_dcc_share(v.dcc_vol, v.fx_vol),
@@ -675,10 +678,10 @@ def page_praesentation() -> None:
              "foot": "theoretische Obergrenze", "accent": ui.BLUE},
         ])
         ui.kpi_row([
-            {"label": f"Unrealisiertes Cashback {sfx}",
-             "value": f"CHF {chf(cb_head, 0)}",
-             "foot": f"+{1 - dcc_share:.1%} Volumen bis zur Obergrenze",
-             "accent": ui.ORANGE},
+            {"label": f"Cashback Worldline {sfx}",
+             "value": f"CHF {chf(v.wl_cb, 0)}",
+             "foot": f"{wl_rate*100:.2f} % effektiv" if wl_rate is not None
+                     else "kein DCC-Volumen", "accent": ui.ORANGE},
             {"label": f"DCC-Kaufvolumen {sfx}",
              "value": f"CHF {chf_c(v.fx_vol_purch)}",
              "foot": "DCC-fähig, Basis der Obergrenze",
