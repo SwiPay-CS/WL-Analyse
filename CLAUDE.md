@@ -376,10 +376,92 @@ CSV-Export. Kein Kunden-Selbstbedienungstool.
 - Identität: Gebühren = Processing Fee + Scheme Fee + Interchange (null Abw.).
 - validate.py prüft das.
 
+## SBB IC++ Import (Stand 2026-09-22)
+Zweite Import-Variante neben Worldline. Format-Erkennung ist inhaltsbasiert
+(Kopfzeile/Sheet-Name), NIE nur an der Dateiendung — die trennt heute
+zufällig (Worldline kommt praktisch immer als CSV, das eine XLSB war eine
+manuelle Datei), ist aber kein Vertrag. Erkennt `loader.detect_format()`
+weder Worldline- noch SBB-Signatur, bricht der Import mit klarer
+Fehlermeldung ab, statt zu raten. Der Upload-Screen zeigt das erkannte
+Format pro Datei an («Erkannt: «datei.xlsx» → SBB IC++»), keine manuelle
+Auswahl nötig.
+
+- SBB liefert ein SAP-Excel (`.xlsx`, Sheet «SAP Document Export» — das
+  zweite Sheet «Tabelle1» ist eine Lookup-Tabelle, kein Transaktionsdatum,
+  und wird ignoriert). Erkennungsmerkmal: Sheet-Name ODER die Spalten
+  `SBB Merchant ID` + `Kommission`.
+- Gruppierung: `SBB Merchant ID` (String wie «SBB212200100050») ist
+  partner_id, `Standort` partner_name — 1:1, kein eigenes
+  Vertragsnummer-Konzept wie bei Worldline. vertragsnummer spiegelt
+  partner_id, Fan-out-Erkennung greift hier bewusst nie (Merchant ID ist
+  bereits die atomare Ebene). vertrag trägt `Acquirer` (SIX Group Services AG
+  / PostFinance AG / reka Schweizer Reisekasse) — informativ, zeigt warum
+  eine Zeile nicht-anbietbar ist.
+- **Gebühren-Basis**: `Kommission` (SAP-generisch, IMMER befüllt) — analog zur
+  Worldline-Regel NICHT aus den `ICF++:*`-Komponenten rekonstruiert.
+  `ICF++:Kommission gesamt` ist bei TWINT/Postcard/Reka strukturell 0 (siehe
+  unten) und bei vereinzelten echten Kartenzeilen sogar unsynchronisiert
+  (Datenfehler im Export, 3 von 23'213 Zeilen in der Testdatei) — `Kommission`
+  ist die einzige Spalte, die immer stimmt.
+- **Bruttobetrag — Fallunterscheidung, nicht eine Spalte für alles**:
+  - Echte Kartenzahlungen (Visa/Mastercard/Debit Mastercard/Maestro/V PAY):
+    `ICF++:Abgerechneter Bruttobetrag`. Bei DCC-Transaktionen ist
+    `Betrag der Verbrauchsposition` NICHT der Abrechnungsbetrag, sondern der
+    aufgewertete Fremdwährungsbetrag, den der Karteninhaber sieht (Davos-artige
+    Falle: naheliegende Spalte, falscher Wert).
+  - TWINT/Postcard/Reka-Pay/Reka Rail (kein IC++-Splitting, `SBB_NO_ICF_BRANDS`
+    in loader.py) sowie die vereinzelte Zeile ganz ohne Kartenprodukt:
+    `Betrag der Verbrauchsposition`. Bei TWINT weicht
+    `ICF++:Abgerechneter Bruttobetrag` leicht vom echten Wert ab (kein
+    Rechenfehler unsererseits, Datenartefakt des Exports).
+  - Verifiziert über die Netto-Identität `Nettobetrag = Brutto + Kommission +
+    DCC Ertrag`: Residuum 0 (1e-13, Gleitkommarauschen) auf dem SBB-Testexport
+    mit dieser Fallunterscheidung — jede einfachere (eine Spalte für alle
+    Zeilen) hatte an mehreren hundert Zeilen ein Residuum im dreistelligen
+    CHF-Bereich.
+- **Brand**: `ICF++:Akzeptanzprodukt` (unterscheidet Debit/Credit Mastercard
+  und fasst Maestro CH/International bereits zu «Maestro» zusammen —
+  Nutzer-Entscheid, Auslandskarte ausserhalb Schweizer Regulatorik aber
+  gleiche Konditionen), NUR für PostFinance/Reka-Zeilen (kein IC++, dort NaN)
+  Rückfall auf die gröbere Spalte `Kartenprodukt` (die Debit/Credit Mastercard
+  NICHT unterscheidet — irrelevant, weil diese Brands ohnehin `spezial`/nicht
+  anbietbar sind). config/brands.json neu: «Twint»-Alias auf TWINT, «Maestro
+  International»-Alias auf Maestro-CH, sowie Postcard/Reka-Pay/Reka Rail als
+  `spezial`/nicht anbietbar (laufen wie TWINT 1:1 als Worldline-Spiegel durch,
+  Delta 0, aber sichtbar ausgewiesen statt gefiltert).
+- **DCC — zwei getrennte Konzepte, nicht eins** (das Feld `DCC Offered*` ist
+  im Export durchgängig 0, auch wenn `DCC Chosen`=1 — unzuverlässig, wird
+  nicht verwendet):
+  - DCC-Potenzial/-fähig (region, Fremdwährungs-Basis in projection.py):
+    `ICF++:Clearing Region` ≠ «Domestic». TWINT/Postcard/Reka haben dort
+    keinen Wert (kein IC++), sind aber laut Definition immer Domestic (gibt
+    es nur in der Schweiz) — NaN wird deshalb explizit auf «Domestic»
+    aufgefüllt, nicht als «unbekannt» stehen gelassen.
+  - DCC genutzt (is_dcc, steuert sp_cashback in pipeline.py): `DCC Chosen`.
+  - dcc_payback: `DCC Ertrag` (separat ausgewiesen, s. Netto-Identität oben).
+- **Idempotenz**: SBB liefert mit `ID der Verbrauchsposition` einen von SAP
+  garantiert eindeutigen Zeilen-Schlüssel — zuverlässiger als der für
+  Worldline zusammengesetzte Datum/Zeit/Terminal/Betrag/Kartennummer-Schlüssel
+  (der bei SBB durch die feinere Zeittaktung eher kollidieren könnte).
+  `loader.idempotency_key()` nutzt ihn, wenn vorhanden, sonst den
+  Composite-Schlüssel; `add_keys()` verwirft die Rohspalte danach wieder.
+- **Bekannte Artefakte** (Testexport, Januar 2026, ein Kunde TUG/SBB, 5
+  Standorte, 23'213 Zeilen): keine Summenzeile (im Gegensatz zu Worldline —
+  unter Beobachtung, ob das generell gilt); 2 Zeilen mit gültiger `Kommission`
+  aber komplett leerem `ICF++:*`-Block; 1 Zeile ganz ohne `Kartenprodukt`
+  (erscheint als «n/a», Delta 0 wie jeder unbekannte Brand).
+- SBB-Anker (Testexport): Zeilen 23'213 · Brutto 1'340'789.29 · Gebühren
+  −8'551.18 · DCC-Ertrag 486.68 · Refund-Zeilen 7 · DCC-genutzt-Zeilen 178.
+  validate_sbb.py prüft das (Pfad per `SBB_XLSX`-Umgebungsvariable oder
+  `data/SBB_Export_ICpp.xlsx`).
+
 ## Status
-Kopfzeile und Sidebar zeigen «Live» (vorher «IN ABNAHME»), auf Nutzer-Entscheid
-2026-08-22. Der Titel im Präsentations-Header lautet «Payment Benchmarking ·
-<Partner>», gleichlautend mit dem PDF-Titel.
+Kopfzeile, Sidebar sowie Präsentations- und Transaktionen-Header zeigen
+«Staging» (vorher «Live», Nutzer-Entscheid 2026-08-22; zurückgestuft
+2026-09-22, weil der neue SBB-Importpfad noch an keinem echten Kunden
+gelaufen ist — «Live» hätte ein Vertrauensniveau behauptet, das für den
+SBB-Teil noch nicht erarbeitet ist). Der Titel im Präsentations-Header lautet
+«Payment Benchmarking · <Partner>», gleichlautend mit dem PDF-Titel.
 
 ## Offen vor Kundeneinsatz
 - ASF-Defaults (Debit 0.30 %, Credit 0.35 %) sind Platzhalter. Vor jedem
@@ -388,6 +470,10 @@ Kopfzeile und Sidebar zeigen «Live» (vorher «IN ABNAHME»), auf Nutzer-Entsch
   nicht bei jedem Kunden neu getippt werden muss.
 - Abnahme gegen die acht Davos-Anker fahren, bevor das Tool auf eine echte
   Kundendatei losgelassen wird.
+- SBB-Import ist an einem Testexport (ein Kunde, ein Monat) verifiziert, noch
+  nicht an einem echten SBB-Kundenfall. Vor dem ersten SBB-Kundeneinsatz auf
+  «Live» zurückstufen prüfen (s. Status oben) und die SBB-Anker gegen den
+  echten Fall nachrechnen.
 
 ## Sicherheit
 - Keine Kartennummern (PAN) oder PII im Klartext. Nur Token/Refs. Audit-Logs in

@@ -258,7 +258,7 @@ with st.sidebar:
     page = st.session_state.nav
     st.markdown(
         '<div style="margin-top:1.4rem;font-size:.7rem;color:#8a9495;'
-        f'letter-spacing:.04em">WL Compare {TOOL_VERSION} · Live<br>'
+        f'letter-spacing:.04em">WL Compare {TOOL_VERSION} · Staging<br>'
         'IC++ gegen IC++</div>',
         unsafe_allow_html=True)
 
@@ -405,7 +405,7 @@ def page_praesentation() -> None:
     ui.page_header(
         f"Payment Benchmarking · {partner_disp}",
         "Dein Konditionenvergleich Worldline gegen SwiPay auf einen Blick.",
-        status="Live",
+        status="Staging",
         meta=f"Zeitraum {frm or '–'} bis {to or '–'} · IC++ gegen IC++",
     )
 
@@ -784,7 +784,7 @@ _BRAND_ICON = {"Visa": "VISA", "VisaDebit": "VISA", "Mastercard": "MC",
 
 def page_transaktionen() -> None:
     ui.page_header("Transaktionen", "Filtern, Monatsverlauf und Verteilung prüfen.",
-                   status="Live", meta="Umsatz pro Monat · Verteilung")
+                   status="Staging", meta="Umsatz pro Monat · Verteilung")
     months = _months(df)
 
     # Zweispaltig wie das Etrax-Dashboard: Filter links als Panel, Auswertung
@@ -1310,25 +1310,40 @@ def page_merchants() -> None:
                     c.write(v)
 
 
+_FORMAT_LABEL = {"worldline": "Worldline", "sbb": "SBB IC++"}
+
+
+def _format_note(rpt) -> str:
+    """«datei.csv» → Worldline · «datei.xlsx» → SBB IC++ — pro Datei, damit
+    sichtbar ist, wonach erkannt wurde, ohne dass eine Auswahl nötig war."""
+    formats = getattr(rpt, "file_formats", None)
+    if not formats:
+        return ""
+    parts = [f"«{fname}» → {_FORMAT_LABEL.get(fmt, fmt)}"
+             for fname, fmt in formats.items()]
+    return "Erkannt: " + " · ".join(parts) + ". "
+
+
 def _load_note(dfn, rpt) -> tuple[str, str]:
     """Was der Ingest wirklich getan hat — nie «0 Zeilen geladen» neben Daten.
 
     Drei Fälle: neue Zeilen · Datei bit-identisch blockiert · Datei neu, aber
     jede Zeile schon registriert (derselbe Export neu gespeichert).
     """
+    prefix = _format_note(rpt)
     if rpt.rows_new:
-        return ("ok", f"{num(rpt.rows_new)} Zeilen geladen.")
+        return ("ok", f"{prefix}{num(rpt.rows_new)} Zeilen geladen.")
     if getattr(rpt, "files_known_rows", None):
         return ("info",
-                f"{', '.join(rpt.files_known_rows)}: Datei ist neu, aber jede "
+                f"{prefix}{', '.join(rpt.files_known_rows)}: Datei ist neu, aber jede "
                 f"Zeile war bereits registriert (derselbe Export, neu "
                 f"gespeichert). {num(len(dfn))} Zeilen werden angezeigt, "
                 "nichts doppelt gezählt.")
     if rpt.files_blocked_hash:
         return ("info",
-                f"{', '.join(rpt.files_blocked_hash)}: bit-identisch bereits "
+                f"{prefix}{', '.join(rpt.files_blocked_hash)}: bit-identisch bereits "
                 f"eingelesen. {num(len(dfn))} Zeilen werden angezeigt.")
-    return ("info", f"{num(len(dfn))} Zeilen angezeigt, keine neuen Zeilen.")
+    return ("info", f"{prefix}{num(len(dfn))} Zeilen angezeigt, keine neuen Zeilen.")
 
 
 # ── Fälle & Vorlagen: Helfer ─────────────────────────────────────────────────
@@ -1687,13 +1702,17 @@ def page_einstellungen() -> None:
 
     # ── Upload ──
     with tab_up:
-        ui.section("Worldline-Export laden")
+        ui.section("Export laden")
+        st.caption("Worldline (XLSB/CSV) oder SBB IC++ (XLSX) — das Format "
+                   "wird automatisch anhand der Spalten erkannt, keine Auswahl "
+                   "nötig.")
         _note = st.session_state.pop("load_note", None)
         if _note:
             (st.success if _note[0] == "ok" else st.info)(_note[1])
-        uploaded = st.file_uploader("Worldline-Exporte (XLSB / CSV)",
-                                    type=["xlsb", "csv"], accept_multiple_files=True)
-        sheet_val = st.text_input("Sheet-Name (XLSB, leer = erstes Sheet)", value="WL")
+        uploaded = st.file_uploader("Worldline- oder SBB-Exporte (XLSB / XLSX / CSV)",
+                                    type=["xlsb", "xlsx", "csv"], accept_multiple_files=True)
+        sheet_val = st.text_input("Sheet-Name (Worldline-XLSB, leer = erstes Sheet)",
+                                   value="WL")
         if uploaded and st.button("Laden & prüfen", type="primary"):
             tmp_dir = tempfile.mkdtemp(); paths = []
             for f in uploaded:
@@ -1714,7 +1733,7 @@ def page_einstellungen() -> None:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
         # Convenience: load an export already present in data/ (no re-upload).
-        existing = sorted(p.name for ext in ("*.xlsb", "*.csv")
+        existing = sorted(p.name for ext in ("*.xlsb", "*.xlsx", "*.csv")
                           for p in (ROOT / "data").glob(ext))
         if existing:
             pick = st.selectbox("Oder vorhandene Datei aus data/ laden",
@@ -1733,6 +1752,8 @@ def page_einstellungen() -> None:
         rpt = st.session_state.report
         if rpt is not None:
             ui.section("Abgleichsbericht")
+            if getattr(rpt, "file_formats", None):
+                st.caption(_format_note(rpt).removesuffix(". "))
             ui.kpi_row([
                 {"label": "Neue Zeilen", "value": num(rpt.rows_new), "accent": ui.GREEN},
                 {"label": "Übersprungen", "value": num(rpt.rows_skipped_overlap),

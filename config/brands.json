@@ -50,7 +50,8 @@
       "search_codes": [
         "Maestro-CH",
         "Maestro CH",
-        "Maestro"
+        "Maestro",
+        "Maestro International"
       ]
     },
     {
@@ -101,7 +102,8 @@
       "offerable": false,
       "order": 200,
       "search_codes": [
-        "TWINT"
+        "TWINT",
+        "Twint"
       ]
     },
     {
@@ -113,6 +115,33 @@
         "WeChat Pay",
         "WeChat",
         "WeChatPay"
+      ]
+    },
+    {
+      "display_name": "Postcard",
+      "type": "spezial",
+      "offerable": false,
+      "order": 220,
+      "search_codes": [
+        "Postcard"
+      ]
+    },
+    {
+      "display_name": "Reka-Pay",
+      "type": "spezial",
+      "offerable": false,
+      "order": 230,
+      "search_codes": [
+        "Reka-Pay"
+      ]
+    },
+    {
+      "display_name": "Reka Rail",
+      "type": "spezial",
+      "offerable": false,
+      "order": 240,
+      "search_codes": [
+        "Reka Rail"
       ]
     }
   ]

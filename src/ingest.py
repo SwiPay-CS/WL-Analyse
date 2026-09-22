@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from loader import load_worldline, add_keys
+from loader import load_export, add_keys
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +38,8 @@ class IngestReport:
     rows_new: int = 0
     rows_skipped_overlap: int = 0   # intra-batch dedup + level-3 inter-run backstop
     fanout_partner_ids: list[str] = field(default_factory=list)
+    # file_name -> "worldline" | "sbb", for the upload-report display.
+    file_formats: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -198,15 +200,17 @@ def ingest_files(
                 _audit(con, cid, "BLOCK_DUPLICATE_FILE",
                        f"file={fname} hash={fhash[:12]}")
                 # Still load into memory so the UI can display the data.
-                df = load_worldline(raw_path, sheet=sheet)
+                df, fmt = load_export(raw_path, sheet=sheet)
                 df = add_keys(df)
+                report.file_formats[fname] = fmt
                 reload_only.append((df, fhash, fname))
                 continue
 
-            df = load_worldline(raw_path, sheet=sheet)
+            df, fmt = load_export(raw_path, sheet=sheet)
             df = add_keys(df)
+            report.file_formats[fname] = fmt
             accepted.append((df, fhash, fname))
-            _audit(con, cid, "FILE_LOADED", f"file={fname} rows={len(df)}")
+            _audit(con, cid, "FILE_LOADED", f"file={fname} rows={len(df)} format={fmt}")
 
         if not accepted and not reload_only:
             _audit(con, cid, "INGEST_END", "rows_new=0 reason=all_blocked")
