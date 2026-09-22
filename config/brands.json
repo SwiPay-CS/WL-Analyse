@@ -43,7 +43,7 @@
       ]
     },
     {
-      "display_name": "Maestro-CH",
+      "display_name": "Maestro",
       "type": "debit",
       "offerable": true,
       "order": 50,
@@ -119,7 +119,7 @@
     },
     {
       "display_name": "Postcard",
-      "type": "spezial",
+      "type": "debit",
       "offerable": false,
       "order": 220,
       "search_codes": [
