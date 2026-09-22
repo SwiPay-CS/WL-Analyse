@@ -186,7 +186,22 @@ def load_sbb(path: str) -> pd.DataFrame:
     # Entscheid); nur fuer PostFinance/Reka-Zeilen (kein IC++) leer --
     # dort auf die groebere SAP-Spalte zurueckfallen.
     brand = raw["ICF++:Akzeptanzprodukt"]
-    df["brand"] = brand.where(brand.notna(), raw["Kartenprodukt"]).map(normalize_brand)
+    brand = brand.where(brand.notna(), raw["Kartenprodukt"])
+
+    # Anders als bei Mastercard meldet Akzeptanzprodukt fuer Visa IMMER nur
+    # "Visa", nie "Visa Debit" -- Credit- und Debitkarten sind sonst nicht zu
+    # unterscheiden (68% der "Visa"-Zeilen im Testexport sind tatsaechlich
+    # Debit). Card Accepted Funding Source traegt die Unterscheidung separat.
+    # Nur "Debit" loest Visa Debit aus; Credit/Prepaid/Deferred/NaN bleiben
+    # Visa (Nutzer-Entscheid, spiegelt wie Akzeptanzprodukt Mastercard-Prepaid
+    # bereits selbst unter "Mastercard" statt "Debit Mastercard" fuehrt).
+    # V PAY ist unbetroffen -- Akzeptanzprodukt meldet es bereits eindeutig,
+    # auch wenn Kartenprodukt fälschlich "Visa" zeigt (4 Zeilen im Testexport).
+    funding = raw["ICF++:Card Accepted Funding Source"]
+    is_visa_debit = brand.eq("Visa") & funding.eq("Debit")
+    brand = brand.where(~is_visa_debit, "Visa Debit")
+
+    df["brand"] = brand.map(normalize_brand)
     df["category"] = raw["ICF++:Kartentypengruppe"]
 
     # DCC-Potenzial (Fremdwaehrungskarte) vs. genutzt sind zwei verschiedene

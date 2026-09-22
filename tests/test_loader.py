@@ -18,6 +18,7 @@ _SBB_COLS = [
     "Betrag der Verbrauchsposition", "ICF++:Abgerechneter Bruttobetrag",
     "Kommission", "ICF++:AcquirerServiceFee", "ICF++:CardSchemeFee",
     "ICF++:InterChangeFEE", "DCC Ertrag", "ID der Verbrauchsposition",
+    "ICF++:Card Accepted Funding Source",
 ]
 
 
@@ -29,6 +30,7 @@ def _sbb_row(row_id: str, **overrides) -> dict:
         "Consumer credit card", "Domestic", 0,
         10.0, 10.0,
         -0.10, -0.02, -0.01, -0.07, 0.0, row_id,
+        "Credit",
     ]))
     base.update(overrides)
     return base
@@ -134,6 +136,57 @@ def test_twint_row_uses_generic_gross_field(tmp_path):
     df = load_sbb(str(p))
     assert df.loc[0, "brutto"] == pytest.approx(6.00)
     assert df.loc[0, "brand"] == "Twint"
+
+
+def test_visa_debit_split_by_funding_source(tmp_path):
+    """Akzeptanzprodukt reports plain 'Visa' for BOTH credit and debit cards
+    (unlike Mastercard, which already splits into 'Mastercard' vs. 'Debit
+    Mastercard') -- only Card Accepted Funding Source tells them apart. Found
+    on the real SBB export: 68% of 'Visa' rows were actually Visa Debit,
+    silently priced as credit."""
+    p = tmp_path / "sbb.xlsx"
+    _write_sbb_xlsx(p, [
+        _sbb_row("R1", **{"ICF++:Card Accepted Funding Source": "Debit"}),
+        _sbb_row("R2", **{"ICF++:Card Accepted Funding Source": "Credit"}),
+    ])
+    df = load_sbb(str(p))
+    assert df.loc[0, "brand"] == "Visa Debit"
+    assert df.loc[1, "brand"] == "Visa"
+
+
+def test_visa_prepaid_and_deferred_stay_visa(tmp_path):
+    """Prepaid/Deferred funding sources are NOT debit (Nutzer-Entscheid) --
+    they fall back to plain Visa, mirroring how Akzeptanzprodukt itself
+    already keeps Mastercard Prepaid under 'Mastercard', not 'Debit
+    Mastercard'."""
+    p = tmp_path / "sbb.xlsx"
+    _write_sbb_xlsx(p, [
+        _sbb_row("R1", **{"ICF++:Card Accepted Funding Source": "Prepaid"}),
+        _sbb_row("R2", **{"ICF++:Card Accepted Funding Source": "Deferred"}),
+    ])
+    df = load_sbb(str(p))
+    assert df.loc[0, "brand"] == "Visa"
+    assert df.loc[1, "brand"] == "Visa"
+
+
+def test_vpay_unaffected_by_visa_debit_split(tmp_path):
+    """V PAY must stay V PAY, whether Akzeptanzprodukt reports it directly or
+    Kartenprodukt (wrongly) says 'Visa' while Akzeptanzprodukt correctly says
+    'V PAY' -- 4 such rows exist in the real SBB export."""
+    p = tmp_path / "sbb.xlsx"
+    _write_sbb_xlsx(p, [
+        _sbb_row("R1", **{
+            "Kartenprodukt": "V PAY", "ICF++:Akzeptanzprodukt": "V PAY",
+            "ICF++:Card Accepted Funding Source": "Debit",
+        }),
+        _sbb_row("R2", **{
+            "Kartenprodukt": "Visa", "ICF++:Akzeptanzprodukt": "V PAY",
+            "ICF++:Card Accepted Funding Source": "Debit",
+        }),
+    ])
+    df = load_sbb(str(p))
+    assert df.loc[0, "brand"] == "V PAY"
+    assert df.loc[1, "brand"] == "V PAY"
 
 
 def test_postfinance_row_no_icf_block_and_domestic_fallback(tmp_path):
