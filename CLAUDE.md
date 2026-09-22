@@ -424,11 +424,15 @@ Auswahl nötig.
   Nutzer-Entscheid, Auslandskarte ausserhalb Schweizer Regulatorik aber
   gleiche Konditionen), NUR für PostFinance/Reka-Zeilen (kein IC++, dort NaN)
   Rückfall auf die gröbere Spalte `Kartenprodukt` (die Debit/Credit Mastercard
-  NICHT unterscheidet — irrelevant, weil diese Brands ohnehin `spezial`/nicht
+  NICHT unterscheidet — irrelevant, weil diese Brands ohnehin nicht
   anbietbar sind). config/brands.json neu: «Twint»-Alias auf TWINT, «Maestro
-  International»-Alias auf Maestro-CH, sowie Postcard/Reka-Pay/Reka Rail als
-  `spezial`/nicht anbietbar (laufen wie TWINT 1:1 als Worldline-Spiegel durch,
-  Delta 0, aber sichtbar ausgewiesen statt gefiltert).
+  International»-Alias auf Maestro (Anzeigename seit 2026-09-22 «Maestro»
+  statt «Maestro-CH»), sowie Postcard/Reka-Pay/Reka Rail als nicht anbietbar
+  (laufen wie TWINT 1:1 als Worldline-Spiegel durch, Delta 0, aber sichtbar
+  ausgewiesen statt gefiltert). Reka-Pay/Reka Rail sind `spezial`, Postcard ist
+  seit 2026-09-22 (Nutzer-Entscheid) Typ `debit` — erscheint damit in der
+  Debit-Zeile der Aufschlüsselung statt unter «QR-Code / n/a», weiter mit
+  Delta 0.
 - **DCC — zwei getrennte Konzepte, nicht eins** (das Feld `DCC Offered*` ist
   im Export durchgängig 0, auch wenn `DCC Chosen`=1 — unzuverlässig, wird
   nicht verwendet):
