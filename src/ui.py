@@ -395,8 +395,15 @@ def chart_dcc_share(used: float, fx_total: float) -> alt.Chart:
            .mark_text(radius=106, font=_FONT, fontSize=13, fontWeight="bold",
                       color=ANTHRAZIT)
            .encode(text=alt.Text("lbl:N")))
-    return (arc + txt).properties(height=270).configure_view(
-        strokeWidth=0).configure_legend(
+    # Das Label sitzt bei radius=106, 20px ausserhalb des Rings
+    # (outerRadius=86) -- ohne Padding schneidet die View-Box diesen Rand ab,
+    # sobald das kleine Segment (z.B. "DCC genutzt" bei niedriger
+    # Ausschoepfung) oben zu liegen kommt. Padding reserviert den Rand rund
+    # um den Ring, unabhaengig davon, welches Segment gerade oben liegt.
+    return (arc + txt).properties(
+        height=270,
+        padding={"top": 22, "bottom": 10, "left": 22, "right": 22},
+    ).configure_view(strokeWidth=0).configure_legend(
         labelFont=_FONT, titleFont=_FONT, labelColor=ANTHRAZIT,
         titleColor=INK_60)
 

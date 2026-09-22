@@ -231,17 +231,6 @@ def _divider(pdf: _SwiPayPDF) -> None:
     pdf.ln(3)
 
 
-def _big_kpi(pdf: _SwiPayPDF, label: str, value: str, rgb: tuple) -> None:
-    """Highlighted key metric row."""
-    pdf.set_font(pdf.fam, "", 9)
-    pdf.set_text_color(*_DIM)
-    pdf.cell(95, 8, label, border=0)
-    pdf.set_font(pdf.fam_xb, "", 14)
-    pdf.set_text_color(*rgb)
-    pdf.cell(91, 8, value, border=0, align="R")
-    pdf.ln(8)
-
-
 def _flag(pdf: _SwiPayPDF, text: str, rgb: tuple = _DIM) -> None:
     """Bulleted flag / hint line. Resets x explicitly: after a multi_cell the
     cursor sits at the right edge, which pushed the next flag off the page."""
@@ -461,14 +450,11 @@ def build_pdf(
     # ── Der Vorteil ───────────────────────────────────────────────────────────
     _section_header(pdf, "Dein geldwerter Vorteil")
 
-    # Hero: immer der errechnete Punktwert, wie auf dem Bildschirm. Die
-    # Vorsicht steckt sichtbar im Planungsband und im Deckungs-Badge, nicht in
-    # einer stillen Ersetzung der Headline.
-    hero_lbl = ("Geldwerter Vorteil pro Jahr" if v.is_projected
-                else "Geldwerter Vorteil im Zeitraum")
-    _big_kpi(pdf, hero_lbl, f"CHF {_chf(v.total, 0)}",
-             _GREEN_CI if v.total >= 0 else _ROT)
-
+    # Kein eigener Hero-Text mehr (Nutzer-Entscheid 2026-09-22): der Wert
+    # stand hier UND als "Geldwerter Vorteil"-Kachel in der Aufschluesselung
+    # direkt darunter -- auf der gedruckten Seite, anders als auf dem
+    # Bildschirm, ohne trennenden Kennzahlen-Block dazwischen, wirkte das wie
+    # eine Dopplung. Die Kachel unten traegt den Punktwert jetzt allein.
     if proj_mode:
         cov = projection.coverage
         bc = _BADGE_COLORS.get(cov.label, _DIM)
@@ -492,7 +478,9 @@ def build_pdf(
         pdf.set_text_color(*_ANTHRAZIT)
 
     # Zerlegung: beim Acquiring SPART der Haendler, beim DCC BEKOMMT er mehr.
-    # Die Summe ist exakt der Hero-Wert (Identitaet, siehe engine.py).
+    # Acquiring + DCC ergibt exakt "Geldwerter Vorteil" (Identitaet, siehe
+    # engine.py) -- die dritte Kachel ist jetzt die einzige Stelle, an der
+    # dieser Punktwert in diesem Abschnitt steht.
     y = _tiles(pdf, pdf.get_y(), [
         (f"Acquiring-Ersparnis {v.suffix}", f"CHF {_chf(v.acquiring, 0)}",
          _GREEN_CI if v.acquiring >= 0 else _ROT),
