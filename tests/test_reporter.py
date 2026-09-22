@@ -96,6 +96,17 @@ def test_renders_with_zero_turnover():
     assert build_pdf(view=v, **_META)[:4] == b"%PDF"
 
 
+def test_dcc_current_tile_zero_purchase_volume_renders():
+    """"Cashback Aktuell" (ersetzt seit 2026-09-17 die alte "Unrealisiert"-
+    Kachel, siehe CLAUDE.md "DCC-Potenzial") rechnet wl_cb / dcc_vol_purch --
+    bei dcc_vol_purch == 0 darf das nicht durch Null teilen, sondern muss auf
+    "kein DCC-Volumen" ausweichen, wie das Pendant auf dem Bildschirm."""
+    d = dict(_D, dcc_vol_purch=0.0)
+    v = build_view(_agg(), _T, d, BASIS_IST)
+    assert v.dcc_vol_purch == 0.0
+    assert build_pdf(view=v, **_META)[:4] == b"%PDF"
+
+
 def test_all_data_hints_render_together():
     agg = _agg(CoverageLabel.INDICATIVE)
     v = build_view(agg, _T, _D, BASIS_PA)

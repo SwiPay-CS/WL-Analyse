@@ -29,6 +29,7 @@ _ANTHRAZIT  = ( 62,  75,  76)   # #3e4b4c  header / body text
 _CYAN       = ( 60, 143, 153)   # #3c8f99
 _GREEN_CI   = (148, 159,  80)   # #949f50
 _AMBER      = (200, 150,  50)
+_ORANGE     = (236, 102,   8)   # #ec6608 -- Cashback Aktuell, spiegelt ui.ORANGE
 _BG         = (244, 242, 239)   # #f4f2ef
 _BLUE       = ( 34,  79,  89)   # #224f59
 _LINE       = (227, 221, 214)   # #e3ddd6
@@ -277,7 +278,7 @@ def _bar_pair(pdf: _SwiPayPDF, x: float, y: float, w: float, h: float,
     bar_w = 15.0
     gap = (w - 2 * bar_w) / 3.0
     for i, (label, val, rgb) in enumerate(
-            [("Worldline", wl, _ANTHRAZIT), ("SwiPay", sp, sp_rgb)]):
+            [("Aktuell", wl, _ANTHRAZIT), ("SwiPay", sp, sp_rgb)]):
         bx = x + gap * (i + 1) + bar_w * i
         bh = abs(val) / span * plot_h
         by = zero_y - bh if val >= 0 else zero_y
@@ -535,7 +536,7 @@ def build_pdf(
     y = _tiles(pdf, pdf.get_y(), [
         (f"Bruttoumsatz {v.suffix}", f"CHF {_chf(v.brutto, 0)}", _BLUE),
         ("Gebührenveränderung", chg_txt,
-         _GREEN_CI if v.rel_pct >= 0 else _ROT, "vs. Worldline"),
+         _GREEN_CI if v.rel_pct >= 0 else _ROT, "vs. Aktuell"),
         (f"Transaktionen {v.suffix}", _num(v.n_txn), _CYAN, v.note),
     ], w_total=W)
     if v.wl_rate is not None:
@@ -554,7 +555,7 @@ def build_pdf(
                 sp_foot += (" · 0.0 %" if abs(achg) < 0.05
                             else f" · {achg:+.1f} %")
         y = _tiles(pdf, y, [
-            ("Gebühren Total Worldline", _pct_rate(v.wl_rate), _ANTHRAZIT,
+            ("Gebühren Total Aktuell", _pct_rate(v.wl_rate), _ANTHRAZIT,
              wl_foot),
             ("Gebühren Total SwiPay", _pct_rate(v.sp_rate),
              _GREEN_CI if dlt >= 0 else _ROT, sp_foot),
@@ -609,12 +610,23 @@ def build_pdf(
         f"Nicht genutzt: CHF {_chf(v.fx_vol - v.dcc_vol, 0)}")
 
     cb_max = v.cashback_ceiling(dcc_pct)
+    # Vierte Kachel spiegelt den Bildschirm (Nutzer-Entscheid 2026-09-17,
+    # siehe CLAUDE.md "DCC-Potenzial"): "Unrealisiert" (Obergrenze minus
+    # sp_cb) wurde durch "Cashback Aktuell" ersetzt -- wl_cb plus der daraus
+    # errechnete Satz auf derselben Kauf-Basis (dcc_vol_purch) wie die
+    # SwiPay-Kachel, sonst waeren Zaehler und Nenner nicht vergleichbar.
+    wl_rate = (v.wl_cb / v.dcc_vol_purch) if v.dcc_vol_purch else None
+    wl_foot = (f"{wl_rate * 100:.2f} % effektiv" if wl_rate is not None
+               else "kein DCC-Volumen")
     y = _tiles(pdf, y + 2, [
-        (f"Cashback SwiPay {v.suffix}", f"CHF {_chf(v.sp_cb, 0)}", _CYAN),
-        (f"Cashback bei 100 % {v.suffix}", f"CHF {_chf(cb_max, 0)}", _BLUE),
-        (f"Unrealisiert {v.suffix}", f"CHF {_chf(cb_max - v.sp_cb, 0)}", _AMBER),
+        (f"Cashback SwiPay {v.suffix}", f"CHF {_chf(v.sp_cb, 0)}", _CYAN,
+         f"{dcc_pct * 100:.2f} % auf {v.dcc_share * 100:.1f} % Ausschöpfung"),
+        (f"Cashback bei 100 % {v.suffix}", f"CHF {_chf(cb_max, 0)}", _BLUE,
+         "theoretische Obergrenze"),
+        (f"Cashback Aktuell {v.suffix}", f"CHF {_chf(v.wl_cb, 0)}", _ORANGE,
+         wl_foot),
         (f"DCC-Kaufvolumen {v.suffix}", f"CHF {_chf(v.fx_vol_purch, 0)}",
-         _ANTHRAZIT),
+         _ANTHRAZIT, "DCC-fähig, Basis der Obergrenze"),
     ], w_total=W)
     pdf.set_xy(pdf.l_margin, y)
     pdf.set_font(pdf.fam, "", 7.5)
@@ -697,7 +709,8 @@ def build_pdf(
         for brand in flags_zero:
             _flag(pdf,
                   f"«{brand}»: kein SwiPay-Angebot – Transaktionen spiegeln "
-                  "Worldline-Konditionen exakt (kein Vergleichseffekt).")
+                  "die Konditionen des aktuellen Anbieters exakt (kein "
+                  "Vergleichseffekt).")
 
         for hint in flags_mix:
             _flag(pdf, hint)
@@ -711,7 +724,7 @@ def build_pdf(
     pdf.multi_cell(
         0, 4.5,
         _safe("Alle Angaben ohne Gewähr. Dieser Vergleich basiert auf den "
-              "eingereichten Worldline-Exportdaten und dem gültigen SwiPay "
+              "eingereichten Exportdaten und dem gültigen SwiPay "
               "IC++-Angebot. Massgeblich für eine Zusammenarbeit ist "
               "ausschliesslich der unterzeichnete Vertrag."),
         border=0,

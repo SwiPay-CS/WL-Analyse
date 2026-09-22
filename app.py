@@ -52,7 +52,7 @@ from settings import (
     save_template,
 )
 
-st.set_page_config(page_title="SwiPay · Worldline-Vergleich", layout="wide",
+st.set_page_config(page_title="SwiPay · Payment Benchmarking", layout="wide",
                    initial_sidebar_state="expanded")
 ui.inject_css()
 
@@ -207,10 +207,10 @@ def _monthly(fdf: pd.DataFrame, comp: pd.DataFrame) -> pd.DataFrame:
     if "_month" not in fdf.columns:
         return pd.DataFrame()
     m = fdf.copy()
-    m["WL"] = comp["wl_net"].values
+    m["Aktuell"] = comp["wl_net"].values
     m["SP"] = comp["sp_net"].values
     m["_pb"] = m["brutto"].where(~m["is_refund"], 0.0)
-    out = (m.groupby("_month").agg(WL=("WL", "sum"), SP=("SP", "sum"),
+    out = (m.groupby("_month").agg(Aktuell=("Aktuell", "sum"), SP=("SP", "sum"),
                                    Umsatz=("_pb", "sum")).reset_index()
            .rename(columns={"_month": "Monat"}).sort_values("Monat"))
     return out
@@ -340,7 +340,7 @@ with st.sidebar:
     page = st.session_state.nav
     st.markdown(
         '<div style="margin-top:1.4rem;font-size:.7rem;color:#8a9495;'
-        f'letter-spacing:.04em">WL Compare {TOOL_VERSION} · Staging<br>'
+        f'letter-spacing:.04em">Payment Benchmarking {TOOL_VERSION} · Staging<br>'
         'IC++ gegen IC++</div>',
         unsafe_allow_html=True)
 
@@ -389,7 +389,7 @@ if not cases.CASES_DIR.exists():
 # Gate: without data, only Einstellungen is useful.
 if df.empty and page != "Einstellungen":
     ui.page_header("Willkommen", "Lade zuerst einen Worldline-Export, dann geht's los.",
-                   status="Bereit", meta="WL Compare Tool")
+                   status="Bereit", meta="Payment Benchmarking")
     ui.info_banner("Noch keine Daten geladen. Wechsle zu <b>⚙ Einstellungen → Daten "
                    "laden</b> und lade einen Worldline-Export (XLSB/CSV).")
     st.stop()
@@ -486,7 +486,7 @@ def page_praesentation() -> None:
 
     ui.page_header(
         f"Payment Benchmarking · {partner_disp}",
-        "Dein Konditionenvergleich Worldline gegen SwiPay auf einen Blick.",
+        "Dein Konditionenvergleich mit SwiPay auf einen Blick.",
         status="Staging",
         meta=f"Zeitraum {frm or '–'} bis {to or '–'} · IC++ gegen IC++",
     )
@@ -593,7 +593,7 @@ def page_praesentation() -> None:
              "value": f"CHF {chf_c(v.brutto)}",
              "foot": v.note, "accent": ui.BLUE},
             {"label": "Gebührenveränderung", "value": chg_txt,
-             "foot": "vs. Worldline", "accent": tone_chg,
+             "foot": "vs. Aktuell", "accent": tone_chg,
              "value_color": tone_chg},
         ])
         # Effektive Gebührenrate in % vom Umsatz -- vergleichbar mit jedem
@@ -625,7 +625,7 @@ def page_praesentation() -> None:
                                 else f"{achg:+.1f} %")
                     sp_asf_foot += f" · {achg_txt}"
             ui.kpi_row([
-                {"label": "Gebühren Total WL", "value": pct_rate(v.wl_rate),
+                {"label": "Gebühren Total Aktuell", "value": pct_rate(v.wl_rate),
                  "foot": wl_asf_foot, "accent": ui.ANTHRAZIT},
                 {"label": "Gebühren Total SwiPay",
                  "value": pct_rate(v.sp_rate), "foot": sp_asf_foot,
@@ -651,12 +651,12 @@ def page_praesentation() -> None:
         {"label": f"Acquiring-Ersparnis {v.suffix}",
          "value": f"CHF {chf(acq, 0)}",
          "foot": ("gesparte Gebühren · " + share(acq)) if acq >= 0
-                 else "höhere Gebühren als Worldline",
+                 else "höhere Gebühren als aktuell",
          "accent": ui.GREEN if acq >= 0 else ui.ROT},
         {"label": f"DCC-Mehrertrag {v.suffix}",
          "value": f"CHF {chf(dccv, 0)}",
          "foot": ("höherer Cashback · " + share(dccv)) if dccv >= 0
-                 else "geringerer Cashback als Worldline",
+                 else "geringerer Cashback als aktuell",
          "accent": ui.CYAN if dccv >= 0 else ui.ROT},
         {"label": f"Geldwerter Vorteil {v.suffix}",
          "value": f"CHF {chf(tot, 0)}",
@@ -674,7 +674,7 @@ def page_praesentation() -> None:
                              "Acquiring-Gebühren CHF", ui.ROT),
             use_container_width=True)
         st.caption(
-            f"Gebühren vor DCC-Cashback: Worldline CHF {chf(v.wl_fee, 0)} "
+            f"Gebühren vor DCC-Cashback: Aktuell CHF {chf(v.wl_fee, 0)} "
             f"gegen SwiPay CHF {chf(v.sp_fee, 0)} — "
             + (f"**CHF {chf(acq, 0)} gespart**." if acq >= 0
                else f"**CHF {chf(-acq, 0)} teurer**."))
@@ -684,7 +684,7 @@ def page_praesentation() -> None:
                              ui.CYAN),
             use_container_width=True)
         st.caption(
-            f"Cashback aus DCC: Worldline CHF {chf(v.wl_cb, 0)} gegen "
+            f"Cashback aus DCC: Aktuell CHF {chf(v.wl_cb, 0)} gegen "
             f"SwiPay CHF {chf(v.sp_cb, 0)} — "
             + (f"**CHF {chf(dccv, 0)} mehr**." if dccv >= 0
                else f"**CHF {chf(-dccv, 0)} weniger**."))
@@ -760,7 +760,7 @@ def page_praesentation() -> None:
              "foot": "theoretische Obergrenze", "accent": ui.BLUE},
         ])
         ui.kpi_row([
-            {"label": f"Cashback Worldline {sfx}",
+            {"label": f"Cashback Aktuell {sfx}",
              "value": f"CHF {chf(v.wl_cb, 0)}",
              "foot": f"{wl_rate*100:.2f} % effektiv" if wl_rate is not None
                      else "kein DCC-Volumen", "accent": ui.ORANGE},
@@ -783,7 +783,7 @@ def page_praesentation() -> None:
     if not mdf.empty and len(mdf) >= 2:
         a, b = st.columns([1.4, 1])
         with a:
-            st.altair_chart(ui.chart_monthly(mdf[["Monat", "WL", "SP"]]),
+            st.altair_chart(ui.chart_monthly(mdf[["Monat", "Aktuell", "SP"]]),
                             use_container_width=True)
         with b:
             st.altair_chart(ui.chart_volume_monthly(mdf[["Monat", "Umsatz"]]),
@@ -992,9 +992,9 @@ def page_transaktionen() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE: MERCHANTS  (read-only; Gruppieren + Hochrechnung live in Einstellungen)
 # ════════════════════════════════════════════════════════════════════════════
-_MONEY = ["Umsatz", "Ø Ticket", "WL-Geb.", "SP-Geb.", "Diff.", "DCC-Vtl."]
+_MONEY = ["Umsatz", "Ø Ticket", "Aktuell-Geb.", "SP-Geb.", "Diff.", "DCC-Vtl."]
 _MERCH_COLS   = ["Name", "Partner-ID", "Umsatz", "Ø Ticket", "Txn",
-                 "WL-Geb.", "SP-Geb.", "Diff.", "DCC-Vtl."]
+                 "Aktuell-Geb.", "SP-Geb.", "Diff.", "DCC-Vtl."]
 _MERCH_WIDTHS = [2.4, 1.3, 1.2, 1.0, 0.8, 1.1, 1.1, 1.0, 1.0]
 
 
@@ -1002,7 +1002,7 @@ def _agg_merchant(sub: pd.DataFrame) -> dict:
     """One merchant's (or one group's) aggregate row. `sub` must already carry
     wl_net/sp_net/wl_cb/sp_cb/wl_fee/sp_fee (see _with_comparison).
 
-    The display keys (capitalised, e.g. "WL-Geb.") feed the Merchants table.
+    The display keys (capitalised, e.g. "Aktuell-Geb.") feed the Merchants table.
     The underscore keys carry the Ist decomposition an EntityInput needs to
     split its contribution into Acquiring vs DCC -- see _period_entity().
     """
@@ -1013,7 +1013,7 @@ def _agg_merchant(sub: pd.DataFrame) -> dict:
         "Name": str(sub["partner_name"].iloc[0]) if "partner_name" in sub and n else "",
         "Umsatz": round(float(pu["brutto"].sum()), 2), "Txn": len(sub),
         "Ø Ticket": round(float(pu["brutto"].mean()), 2) if n else 0.0,
-        "WL-Geb.": round(float(sub["wl_net"].sum()), 2),
+        "Aktuell-Geb.": round(float(sub["wl_net"].sum()), 2),
         "SP-Geb.": round(float(sub["sp_net"].sum()), 2),
         "Diff.": round(float(sub["wl_net"].sum() - sub["sp_net"].sum()), 2),
         "DCC-Vtl.": round(float(sub["sp_cb"].sum() - sub["wl_cb"].sum()), 2),
@@ -1199,7 +1199,7 @@ def _pid_from_option(opt: str) -> str:
 
 def _fmt_row_values(row: dict) -> list[str]:
     return [chf(row["Umsatz"]), chf(row["Ø Ticket"]), num(row["Txn"]),
-            chf(row["WL-Geb."]), chf(row["SP-Geb."]), chf(row["Diff."]),
+            chf(row["Aktuell-Geb."]), chf(row["SP-Geb."]), chf(row["Diff."]),
             chf(row["DCC-Vtl."])]
 
 
@@ -1214,7 +1214,7 @@ def _entity_from_row(r: dict, label: str, key: str, annual_volume: float) -> Ent
     row dict (Ist-Aggregate über r['_df'] bereits berechnet)."""
     return EntityInput(
         label=label, key=key, df=r["_df"], annual_volume=annual_volume,
-        ist_wl_net=r["WL-Geb."], ist_sp_net=r["SP-Geb."],
+        ist_wl_net=r["Aktuell-Geb."], ist_sp_net=r["SP-Geb."],
         ist_dcc_adv=r["DCC-Vtl."], ist_txn=r["Txn"], ist_brutto=r["Umsatz"],
         ist_wl_fee=r.get("_wl_fee", 0.0), ist_sp_fee=r.get("_sp_fee", 0.0),
         ist_wl_cashback=r.get("_wl_cb", 0.0), ist_sp_cashback=r.get("_sp_cb", 0.0),
@@ -1233,13 +1233,13 @@ def _period_entity(label: str, key: str, raw_df: pd.DataFrame, annual_volume: fl
     Aggregate und Tier-B-Projektionsbasis müssen denselben Zeitraum spiegeln."""
     pf = raw_df[_apply_period(raw_df, frm, to)]
     if pf.empty:
-        agg_row = {"WL-Geb.": 0.0, "SP-Geb.": 0.0, "DCC-Vtl.": 0.0, "Txn": 0,
+        agg_row = {"Aktuell-Geb.": 0.0, "SP-Geb.": 0.0, "DCC-Vtl.": 0.0, "Txn": 0,
                    "Umsatz": 0.0}
     else:
         agg_row = _agg_merchant(_with_comparison(pf))
     return EntityInput(
         label=label, key=key, df=pf, annual_volume=annual_volume,
-        ist_wl_net=agg_row["WL-Geb."], ist_sp_net=agg_row["SP-Geb."],
+        ist_wl_net=agg_row["Aktuell-Geb."], ist_sp_net=agg_row["SP-Geb."],
         ist_dcc_adv=agg_row["DCC-Vtl."], ist_txn=agg_row["Txn"],
         ist_brutto=agg_row["Umsatz"],
         ist_wl_fee=agg_row.get("_wl_fee", 0.0),
@@ -1860,7 +1860,7 @@ def page_einstellungen() -> None:
                 st.error("Unbekannte Brands (nicht in der Stammliste): "
                          + ", ".join(f"«{b}»" for b in unmapped)
                          + " — im Tab «Mapping» pflegen. Werden sonst wie nicht-"
-                         "anbietbar behandelt (Worldline 1:1).")
+                         "anbietbar behandelt (aktueller Anbieter 1:1).")
             else:
                 st.success("Alle Brands im Export sind der Stammliste zugeordnet.")
 
@@ -1868,7 +1868,7 @@ def page_einstellungen() -> None:
     with tab_map:
         ui.section("Brand-Stammliste", "git-versioniert · config/brands.json")
         st.caption("Logisches Brand = ein/mehrere Such-Codes (Aliase). Typ steuert die "
-                   "ASF. QR-Code-Brands sind nie anbietbar (Worldline 1:1).")
+                   "ASF. QR-Code-Brands sind nie anbietbar (aktueller Anbieter 1:1).")
         # Typ als Klartext-Label (dieselben Namen wie in der Aufschlüsselung und
         # bei der ASF-Eingabe), nicht als Rohschlüssel. Beim Speichern zurück
         # auf den Schlüssel gemappt.

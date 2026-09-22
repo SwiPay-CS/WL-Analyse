@@ -35,9 +35,9 @@ def _bar_rows(chart) -> dict:
 
 def test_compare_chart_carries_both_sides_and_swiss_labels():
     r = _bar_rows(ui.chart_compare(530544.0, 470828.0, "Gebühren CHF"))
-    assert r["Worldline"]["Wert"] == pytest.approx(530544.0)
+    assert r["Aktuell"]["Wert"] == pytest.approx(530544.0)
     assert r["SwiPay"]["Wert"] == pytest.approx(470828.0)
-    assert r["Worldline"]["lbl"] == "530'544"
+    assert r["Aktuell"]["lbl"] == "530'544"
 
 
 def test_compare_chart_handles_a_worse_swipay_side():

@@ -296,20 +296,20 @@ def chart_compare(wl: float, sp: float, axis_title: str,
     """Worldline gegen SwiPay als zwei Balken. Ein Bauplan fuer jedes Paar
     (Gebuehren, Cashback, ...), damit die Seite nicht bei jedem Vergleich
     anders aussieht. sp_color trennt Kosten (Rot) von Ertrag (Cyan)."""
-    df = pd.DataFrame({"Anbieter": ["Worldline", "SwiPay"], "Wert": [wl, sp]})
+    df = pd.DataFrame({"Anbieter": ["Aktuell", "SwiPay"], "Wert": [wl, sp]})
     df["lbl"] = df["Wert"].map(lambda v: chf(v, 0))
     lo, hi = min(0.0, wl, sp), max(0.0, wl, sp)
     pad = (hi - lo) * 0.18 or 1.0
     bars = (
         alt.Chart(df).mark_bar(size=56, cornerRadiusEnd=6)
         .encode(
-            x=alt.X("Anbieter:N", title=None, sort=["Worldline", "SwiPay"],
+            x=alt.X("Anbieter:N", title=None, sort=["Aktuell", "SwiPay"],
                     scale=alt.Scale(paddingInner=0.5, paddingOuter=0.5),
                     axis=alt.Axis(labelAngle=0, labelFontSize=12)),
             y=alt.Y("Wert:Q", axis=_chf_axis(axis_title),
                     scale=alt.Scale(domain=[lo, hi + pad], nice=False)),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
-                domain=["Worldline", "SwiPay"], range=[ANTHRAZIT, sp_color]),
+                domain=["Aktuell", "SwiPay"], range=[ANTHRAZIT, sp_color]),
                 legend=None),
         )
     )
@@ -425,8 +425,8 @@ def chart_dcc_potential(used: float, fx_total: float) -> alt.Chart:
 
 
 def chart_monthly(df: pd.DataFrame) -> alt.Chart:
-    """df columns: Monat, WL, SP (net fees per month)."""
-    long = df.melt("Monat", value_vars=["WL", "SP"], var_name="Anbieter",
+    """df columns: Monat, Aktuell, SP (net fees per month)."""
+    long = df.melt("Monat", value_vars=["Aktuell", "SP"], var_name="Anbieter",
                    value_name="Gebühren")
     line = (
         alt.Chart(long).mark_line(point=True, strokeWidth=3)
@@ -434,7 +434,7 @@ def chart_monthly(df: pd.DataFrame) -> alt.Chart:
             x=alt.X("Monat:N", title=None),
             y=alt.Y("Gebühren:Q", axis=_chf_axis("Gebühren CHF")),
             color=alt.Color("Anbieter:N", scale=alt.Scale(
-                domain=["WL", "SP"], range=[ANTHRAZIT, ROT]),
+                domain=["Aktuell", "SP"], range=[ANTHRAZIT, ROT]),
                 legend=alt.Legend(orient="top", title=None)),
         )
     )
