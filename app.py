@@ -237,6 +237,88 @@ def _region(fdf: pd.DataFrame) -> pd.DataFrame:
     return g[g["Region"].ne("NAN")].sort_values("Umsatz", ascending=False)
 
 
+def _fees_by_brand(fdf: pd.DataFrame) -> pd.DataFrame:
+    """Ist-Gebühren pro Brand (nur Käufe), in Reihenfolge der Brand-Stammliste
+    (config/brands.json, order-Feld). Gebühren Total ist die rohe, vorzeichen-
+    richtige Basis (wie pipeline.wl_fee) -- vor Abzug des DCC-Cashbacks, der
+    separat in dcc_payback steht. ASF/ICF/CSF fehlen bei Zeilen ohne
+    Komponenten-Aufschlüsselung (v. a. TWINT, siehe CLAUDE.md) -- dort bleibt
+    die Summe auf 0, _has_* markiert das für die Anzeige (leer statt 0)."""
+    p = fdf[~fdf["is_refund"]].copy()
+    if p.empty:
+        return pd.DataFrame()
+    is_txn = p["brutto"].notna() | p["gebuehren"].notna()
+    p = p[is_txn]
+    if p.empty:
+        return pd.DataFrame()
+
+    p["_geb"] = -p["gebuehren"].fillna(0.0)
+    has_comp = p[["processing_fee", "interchange", "scheme_fee"]].notna().any(axis=1)
+    p["_asf"] = p["processing_fee"].abs().where(has_comp)
+    p["_icf"] = p["interchange"].abs().where(has_comp)
+    p["_csf"] = p["scheme_fee"].abs().where(has_comp)
+
+    codes = p["brand"].astype(str)
+    recs = {c: master.match(c) for c in codes.unique()}
+
+    def _label(c: str) -> str:
+        if recs[c]:
+            return recs[c].display_name
+        return "n/a" if c.strip().lower() in ("nan", "none", "") else c
+
+    p["_brand"] = codes.map(_label)
+    p["_order"] = codes.map(lambda c: recs[c].order if recs[c] else 10_000)
+
+    g = p.groupby("_brand", as_index=False).agg(
+        _order=("_order", "min"), Umsatz=("brutto", "sum"),
+        Anzahl=("brutto", "count"), GebTotal=("_geb", "sum"),
+        ASF=("_asf", "sum"), ICF=("_icf", "sum"), CSF=("_csf", "sum"),
+        _has_asf=("_asf", lambda s: bool(s.notna().any())),
+        _has_icf=("_icf", lambda s: bool(s.notna().any())),
+        _has_csf=("_csf", lambda s: bool(s.notna().any())),
+    )
+    return g.sort_values(["_order", "_brand"], kind="stable").reset_index(drop=True)
+
+
+def _render_fees_by_brand(fdf: pd.DataFrame) -> None:
+    g = _fees_by_brand(fdf)
+    if g.empty:
+        st.caption("Keine Käufe in dieser Auswahl.")
+        return
+
+    def _rate(fee: float, base: float) -> str:
+        return pct_rate(fee / base) if base else "–"
+
+    rows = []
+    for _, r in g.iterrows():
+        rows.append({
+            "Brand": r["_brand"], "Umsatz": chf(r["Umsatz"]),
+            "Anzahl Trx": num(r["Anzahl"]),
+            "Gebühren Total": chf(r["GebTotal"]),
+            "Ø-Satz": _rate(r["GebTotal"], r["Umsatz"]),
+            "ASF-Satz": _rate(r["ASF"], r["Umsatz"]) if r["_has_asf"] else "–",
+            "ICF-Satz": _rate(r["ICF"], r["Umsatz"]) if r["_has_icf"] else "–",
+            "CSF-Satz": _rate(r["CSF"], r["Umsatz"]) if r["_has_csf"] else "–",
+        })
+
+    tot = g[["Umsatz", "Anzahl", "GebTotal", "ASF", "ICF", "CSF"]].sum()
+    any_asf, any_icf, any_csf = g["_has_asf"].any(), g["_has_icf"].any(), g["_has_csf"].any()
+    rows.append({
+        "Brand": "Total", "Umsatz": chf(tot["Umsatz"]),
+        "Anzahl Trx": num(tot["Anzahl"]),
+        "Gebühren Total": chf(tot["GebTotal"]),
+        "Ø-Satz": _rate(tot["GebTotal"], tot["Umsatz"]),
+        "ASF-Satz": _rate(tot["ASF"], tot["Umsatz"]) if any_asf else "–",
+        "ICF-Satz": _rate(tot["ICF"], tot["Umsatz"]) if any_icf else "–",
+        "CSF-Satz": _rate(tot["CSF"], tot["Umsatz"]) if any_csf else "–",
+    })
+
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    if not (g["_has_asf"].all() and g["_has_icf"].all() and g["_has_csf"].all()):
+        st.caption("«–» = keine Komponenten-Aufschlüsselung in den Rohdaten für "
+                   "diesen Brand (v. a. TWINT).")
+
+
 def _apply_period(df: pd.DataFrame, frm, to) -> pd.Series:
     if frm and to and "_month" in df.columns:
         return df["_month"].between(frm, to, inclusive="both")
@@ -901,6 +983,10 @@ def page_transaktionen() -> None:
             r = _region(fdf)
             if not r.empty:
                 st.altair_chart(ui.chart_region(r), use_container_width=True)
+
+        ui.section("Gebühren pro Brand",
+                   "Ist-Gebühren aus dem Export, nur Käufe, vor DCC-Cashback")
+        _render_fees_by_brand(fdf)
 
 
 # ════════════════════════════════════════════════════════════════════════════
